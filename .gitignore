@@ -1,0 +1,26 @@
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# OS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# Local build logs (тимчасові, не потрібні у репо)
+build_fat.log
+build_slim.log
+build_fat_nocache.log
+build_slim_nocache.log
+
+# Archives
+*.zip
