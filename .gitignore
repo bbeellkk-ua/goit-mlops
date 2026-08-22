@@ -1,26 +1,23 @@
-# Virtual envs
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
 .venv/
 venv/
 env/
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.egg-info/
+# Environment
+.env
 
-# OS
+# MLflow local (на випадок локальних запусків без tracking server)
+mlruns/
+mlartifacts/
+
+# Best model artifacts (заповнюється скриптом train_and_push.py)
+best_model/*
+!best_model/.gitkeep
+
+# IDE / OS
 .DS_Store
-
-# Editors
 .idea/
 .vscode/
-
-# Local build logs (тимчасові, не потрібні у репо)
-build_fat.log
-build_slim.log
-build_fat_nocache.log
-build_slim_nocache.log
-
-# Archives
-*.zip

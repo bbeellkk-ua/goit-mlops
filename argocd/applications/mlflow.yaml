@@ -1,0 +1,60 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mlflow
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    namespace: application
+    server: https://kubernetes.default.svc
+  source:
+    repoURL: https://community-charts.github.io/helm-charts
+    chart: mlflow
+    targetRevision: 1.6.2
+    helm:
+      releaseName: mlflow
+      valuesObject:
+        service:
+          type: ClusterIP
+          port: 5000
+
+        auth:
+          enabled: false
+
+        # Використовуємо зовнішній PostgreSQL (mlflow-postgres),
+        # тому вбудований — вимикаємо.
+        postgresql:
+          enabled: false
+
+        # ⚠️ У навчальному прикладі креденшали передаються напряму.
+        # У production — виносити в Kubernetes Secret / External Secrets.
+        extraEnvVars:
+          AWS_ACCESS_KEY_ID: "minio"
+          AWS_SECRET_ACCESS_KEY: "minio123"
+          MLFLOW_S3_ENDPOINT_URL: "http://minio.application.svc.cluster.local:9000"
+          MLFLOW_BACKEND_STORE_URI: "postgresql://mlflow:mlflowpass@mlflow-postgres-postgresql.application.svc.cluster.local:5432/mlflow"
+          MLFLOW_ARTIFACT_ROOT: "s3://mlflow-artifacts"
+
+        extraArgs:
+          backend-store-uri: "$(MLFLOW_BACKEND_STORE_URI)"
+          default-artifact-root: "$(MLFLOW_ARTIFACT_ROOT)"
+          host: "0.0.0.0"
+          port: "5000"
+
+        # Розміщуємо на infra-нодах (taint node=infra:NoSchedule)
+        nodeSelector:
+          node: infra
+        tolerations:
+          - key: node
+            operator: Equal
+            value: infra
+            effect: NoSchedule
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

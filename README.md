@@ -1,202 +1,275 @@
-# Домашнє завдання №3 — Bash + Docker для PyTorch inference
+# Домашнє завдання №9 — Experiment tracking з MLflow + Prometheus PushGateway
 
-Домашнє завдання поєднує теми **«Основи Linux/Bash-скриптування»** і
-**«Контейнеризація ML-моделей»**. У проєкті:
+Уся інфраструктура (MinIO, PostgreSQL, MLflow Tracking Server, PushGateway)
+розгортається декларативно через **ArgoCD**. Усі поди розміщуються на
+infra-нодах кластера (`nodeSelector: node=infra` + toleration на taint
+`node=infra:NoSchedule`).
 
-- готуємо середовище через bash-скрипт (`scripts/install_dev_tools.sh`);
-- експортуємо претреновану модель `MobileNet V2` у TorchScript (`model/model.pt`);
-- пишемо CLI inference-скрипт з top-3 передбаченнями (`app/inference.py`);
-- будуємо два Docker-образи для inference — «важкий» `Dockerfile.fat`
-  і оптимізований multi-stage `Dockerfile.slim`;
-- порівнюємо їх (розмір, шари, час збірки, inference-результат) — див.
-  [`report.md`](./report.md).
+> ℹ️ **Bitnami legacy images.** Bitnami перенесли безкоштовні образи в реєстр
+> `docker.io/bitnamilegacy/*`. У values для MinIO та PostgreSQL явно вказано
+> `image.repository: bitnamilegacy/...` і `global.security.allowInsecureImages: true`,
+> щоб чарти працювали без Bitnami Premium.
 
 ---
 
-## Структура проєкту
+## 🧭 Архітектура
 
 ```
-lesson-3/
-├── app/
-│   └── inference.py           # CLI-скрипт inference (top-3)
-├── model/
-│   └── model.pt               # TorchScript-модель (створюється export_model.py)
-├── scripts/
-│   └── install_dev_tools.sh   # ідемпотентний bash-скрипт підготовки середовища
-├── export_model.py            # експорт mobilenet_v2 → TorchScript
-├── requirements.txt           # torch / torchvision / pillow (фіксовані версії)
-├── Dockerfile.fat             # «важкий» образ на python:3.13
-├── Dockerfile.slim            # оптимізований multi-stage на python:3.13-slim
-├── .dockerignore              # виключення для docker build context
-├── example.jpg                # тестове зображення (Wikimedia Commons)
-├── install.log                # лог bash-скрипта
-├── comparison.txt             # сирі дані порівняння образів (docker history)
-├── report.md                  # звіт з порівнянням fat vs slim
-└── README.md                  # цей файл
+┌──────────────────────────────────────────────────────────────────────────┐
+│                              Kubernetes cluster                          │
+│                                                                          │
+│   ns: application                             ns: monitoring             │
+│   ┌────────────────────────────┐              ┌──────────────────────┐   │
+│   │  minio (S3, :9000)         │◄──artifacts──│                      │   │
+│   │  bucket: mlflow-artifacts  │              │  kube-prometheus-    │   │
+│   └────────────────────────────┘              │  stack (Prometheus,  │   │
+│                                               │  Grafana)            │   │
+│   ┌────────────────────────────┐              │                      │   │
+│   │  mlflow-postgres (:5432)   │              │        ▲             │   │
+│   │  db=mlflow / user=mlflow   │◄──metadata───┤        │ scrape      │   │
+│   └────────────────────────────┘              │        │ (ServiceMon)│   │
+│                                               │        │             │   │
+│   ┌────────────────────────────┐              │  ┌───────────────┐   │   │
+│   │  mlflow Tracking (:5000)   │              │  │ pushgateway   │   │   │
+│   │  UI / REST API             │              │  │  (:9091)      │   │   │
+│   └────────────────────────────┘              │  └───────────────┘   │   │
+│              ▲                                └──────────────────────┘   │
+│              │ log_param / log_metric / log_model                        │
+└──────────────┼───────────────────────────────────────────────────────────┘
+               │              ▲                          ▲
+               │              │ port-forward             │ port-forward
+        ┌──────┴──────────────┴──────────────────────────┴─────────┐
+        │           experiments/train_and_push.py                  │
+        │  - grid search LogisticRegression (C × max_iter)         │
+        │  - log params/metrics/model у MLflow                     │
+        │  - push accuracy/loss у PushGateway (labels: run_id)     │
+        │  - завантаження best model у ../best_model/              │
+        └──────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Вимоги
+## 📁 Структура проєкту
 
-- macOS / Linux
-- Python **≥ 3.13** (у прикладі — `python3.13` з Homebrew)
-- Docker Desktop **≥ 4.x** (містить Docker Compose V2)
-- ~2 ГБ вільного місця для fat-образу
+```
+goit-mlops/
+├── argocd/
+│   └── applications/
+│       ├── minio.yaml            # MinIO (S3, bucket mlflow-artifacts)
+│       ├── mlflow-postgres.yaml  # PostgreSQL для MLflow metadata
+│       ├── mlflow.yaml           # MLflow Tracking Server (ClusterIP:5000)
+│       └── pushgateway.yaml      # Prometheus PushGateway (ClusterIP:9091)
+├── experiments/
+│   ├── train_and_push.py         # тренує моделі, логує в MLflow, пушить у PushGateway
+│   ├── requirements.txt
+│   └── .env.example              # шаблон змінних середовища
+├── best_model/                   # сюди завантажується найкраща модель
+├── screenshots/                  # скріншоти MLflow UI + Grafana
+└── README.md
+```
 
 ---
 
-## Крок 1. Підготовка середовища (bash-скрипт)
+## 🚀 Крок 1. Розгортання інфраструктури через ArgoCD
 
-Скрипт `scripts/install_dev_tools.sh`:
-
-- перевіряє наявність `docker`, `docker compose version`, Python ≥ 3.13, `pip3`;
-- створює локальний `.venv/` через знайдений `python3.13`;
-- встановлює у venv `torch`, `torchvision`, `pillow` (з `requirements.txt`);
-- пише все у `install.log`;
-- **ідемпотентний**: повторний запуск не перевстановлює наявні компоненти.
-
-Запуск:
+Усі `Application`-и налаштовані на **project: `default`** і `syncPolicy.automated`,
+тому після `kubectl apply` синхронізація відбувається автоматично.
 
 ```bash
-bash scripts/install_dev_tools.sh
+kubectl apply -f argocd/applications/minio.yaml
+kubectl apply -f argocd/applications/mlflow-postgres.yaml
+kubectl apply -f argocd/applications/mlflow.yaml
+kubectl apply -f argocd/applications/pushgateway.yaml
+```
+
+Перевірити стан у ArgoCD UI або через CLI:
+
+```bash
+argocd app list
+argocd app get mlflow
+```
+
+### Перевірка подів
+
+```bash
+kubectl get pods -n application  | grep -E 'mlflow|minio|postgres'
+kubectl get pods -n monitoring   | grep pushgateway
+```
+
+Очікуваний вигляд:
+
+```
+NAME                                            READY   STATUS
+minio-xxxxxxxxxx-xxxxx                          1/1     Running
+mlflow-postgres-postgresql-0                    1/1     Running
+mlflow-xxxxxxxxxx-xxxxx                         1/1     Running
+pushgateway-prometheus-pushgateway-xxxxx        1/1     Running
+```
+
+### Перевірка ServiceMonitor (Prometheus)
+
+PushGateway публікує `ServiceMonitor` з міткою `release: kube-prometheus-stack`
+— саме її очікує наш Prometheus.
+
+```bash
+kubectl get servicemonitor -n monitoring pushgateway-prometheus-pushgateway \
+  -o jsonpath='{.metadata.labels}'
+# → {"release":"kube-prometheus-stack", ...}
+```
+
+У Prometheus UI (`Status → Targets`) має з'явитися job
+`monitoring/pushgateway-prometheus-pushgateway` у стані `UP`.
+
+---
+
+## 🔌 Крок 2. Port-forward до сервісів
+
+Скрипт запускається локально, тож пробрасуємо порти сервісів у localhost:
+
+```bash
+kubectl port-forward -n application svc/mlflow 5000:5000 &
+kubectl port-forward -n application svc/minio 9000:9000 &
+kubectl port-forward -n monitoring  svc/pushgateway-prometheus-pushgateway 9091:9091 &
+```
+
+Перевірка доступності:
+
+- MLflow UI:    <http://localhost:5000>
+- MinIO API:    <http://localhost:9000> (S3 endpoint, у браузері віддає 403 — це нормально)
+- PushGateway:  <http://localhost:9091>
+
+---
+
+## 🐍 Крок 3. Локальне середовище та `.env`
+
+```bash
+cd experiments
+
+python3 -m venv .venv
 source .venv/bin/activate
+
+pip install -r requirements.txt
+
+cp .env.example .env
 ```
 
-Після цього:
+За замовчуванням значення у `.env` вже відповідають конфігурації ArgoCD
+Applications (creds MinIO та PostgreSQL з values). Змінюйте лише за
+необхідності.
+
+---
+
+## 🧪 Крок 4. Запуск експериментів
 
 ```bash
-docker --version
-docker compose version
-python3 --version
-pip3 --version
-python3 -c "import torch, torchvision, PIL; print(torch.__version__, torchvision.__version__, PIL.__version__)"
+python train_and_push.py
+```
+
+Що відбувається:
+
+1. Створюється (або підхоплюється) експеримент **`Iris Classification HW9`**.
+2. Виконуються **8 запусків** LogisticRegression по grid:
+   - `C ∈ {0.01, 0.1, 1.0, 10.0}`
+   - `max_iter ∈ {100, 500}`
+3. Для кожного run:
+   - `mlflow.log_param("C", …)`, `log_param("max_iter", …)`;
+   - `mlflow.log_metric("accuracy", …)`, `log_metric("loss", …)`;
+   - `mlflow.sklearn.log_model(model, "model")` → artifact у MinIO (`s3://mlflow-artifacts/…`);
+   - `push_to_gateway(...)` → метрики `mlflow_accuracy` та `mlflow_loss`
+     з labels `run_id`, `run_name` у PushGateway (job=`mlflow_experiments`).
+4. Після завершення скрипт знаходить run з максимальною accuracy й
+   завантажує його `model/` artifact у **`../best_model/`** разом із
+   summary-файлом `BEST_RUN.txt`.
+
+Приклад підсумкового виводу:
+
+```
+📊 Підсумок запусків:
+   run_name                    accuracy       loss
+   C=10.0_iter=500               1.0000     0.0489
+   C=10.0_iter=100               1.0000     0.0489
+   C=1.0_iter=500                1.0000     0.0619
+   ...
+🏆 Найкращий run: run_id=abc123... accuracy=1.0000 loss=0.0489
+📦 Модель завантажено у: /…/best_model/model
 ```
 
 ---
 
-## Крок 2. Експорт моделі у TorchScript
+## 🖥️ Крок 5. Перегляд у MLflow UI
 
-`export_model.py` завантажує `mobilenet_v2` через сучасний `weights=` API
-(`MobileNet_V2_Weights.DEFAULT`), переводить у `eval()`, робить
-`torch.jit.trace(...)` і зберігає у `model/model.pt`.
+Відкрийте <http://localhost:5000> → експеримент **`Iris Classification HW9`**.
 
-```bash
-python3 export_model.py
+Для кожного run доступні:
+
+- **Parameters**: `C`, `max_iter`;
+- **Metrics**: `accuracy`, `loss`;
+- **Artifacts**: `model/` (Pickle + `MLmodel` + `conda.yaml` / `python_env.yaml`);
+- **Tags**: `hw=lesson-9`, `model_family=LogisticRegression`;
+- службова інформація: host, user, start/end time.
+
+Можна вибрати кілька runs і натиснути **Compare** — MLflow побудує
+таблицю параметрів і графік метрик між ними.
+
+Скріншоти — див. `screenshots/`.
+
+---
+
+## 📈 Крок 6. Метрики у Grafana
+
+У Grafana → **Explore → Prometheus**:
+
+```promql
+# Пари accuracy/loss по run_name
+mlflow_accuracy
+mlflow_loss
 ```
 
-Очікуваний вивід:
+Корисні запити:
+
+```promql
+# Найкраща accuracy серед усіх запусків
+max(mlflow_accuracy)
+
+# Топ-5 запусків за accuracy
+topk(5, mlflow_accuracy)
+```
+
+Метрики мають labels `run_id`, `run_name`, `exported_job`, `instance`,
+що дає можливість фільтрувати по конкретному запуску.
+
+Скріншоти — див. `screenshots/`.
+
+---
+
+## 🏆 Крок 7. Найкраща модель
+
+Після виконання `train_and_push.py` у `best_model/` з'являється:
 
 ```
-[OK] TorchScript-модель збережено: model/model.pt
-[OK] Тестовий forward-pass: output.shape = (1, 1000)
+best_model/
+├── BEST_RUN.txt        # run_id, accuracy, loss найкращого запуску
+└── model/
+    ├── MLmodel
+    ├── conda.yaml
+    ├── python_env.yaml
+    ├── requirements.txt
+    └── model.pkl
+```
+
+Модель можна одразу підвантажити:
+
+```python
+import mlflow.sklearn
+model = mlflow.sklearn.load_model("best_model/model")
 ```
 
 ---
 
-## Крок 3. Локальний inference
+## 🧹 Очистка
 
 ```bash
-python3 app/inference.py example.jpg
+kubectl delete -f argocd/applications/
 ```
 
-Приклад результату (тестове зображення — жовтий лабрадор):
-
-```
-Image: example.jpg
-Top-3 predictions (MobileNet V2, ImageNet):
-  #1: class_id= 208  confidence=0.1320  name=Labrador retriever
-  #2: class_id= 209  confidence=0.0274  name=Chesapeake Bay retriever
-  #3: class_id= 273  confidence=0.0228  name=dingo
-```
-
-`app/inference.py`:
-
-- приймає шлях до зображення як CLI-аргумент;
-- шукає `model/model.pt` у локальному репо та у `/app/model/model.pt` (для Docker);
-- використовує офіційний `weights.transforms()` (правильний resize/normalize);
-- інференс під `torch.no_grad()`;
-- друкує top-3 `(class_id, name, confidence)`.
-
----
-
-## Крок 4. Збірка Docker-образів
-
-**Fat (важкий):**
-
-```bash
-docker build -f Dockerfile.fat -t ml-infer-fat:1.0 .
-```
-
-**Slim (оптимізований, multi-stage):**
-
-```bash
-docker build -f Dockerfile.slim -t ml-infer-slim:1.0 .
-```
-
----
-
-## Крок 5. Запуск inference у контейнерах
-
-Локальний файл `example.jpg` монтуємо в контейнер через bind mount:
-
-```bash
-# Fat
-docker run --rm \
-  -v "$(pwd)/example.jpg:/app/example.jpg:ro" \
-  ml-infer-fat:1.0 /app/example.jpg
-
-# Slim
-docker run --rm \
-  -v "$(pwd)/example.jpg:/app/example.jpg:ro" \
-  ml-infer-slim:1.0 /app/example.jpg
-```
-
-Обидва контейнери повертають **однаковий** top-3 результат:
-
-```
-Image: /app/example.jpg
-Top-3 predictions (MobileNet V2, ImageNet):
-  #1: class_id= 208  confidence=0.1320  name=Labrador retriever
-  #2: class_id= 209  confidence=0.0274  name=Chesapeake Bay retriever
-  #3: class_id= 273  confidence=0.0228  name=dingo
-```
-
----
-
-## Крок 6. Порівняння образів
-
-```bash
-docker images | grep ml-infer
-docker history --no-trunc ml-infer-fat:1.0
-docker history --no-trunc ml-infer-slim:1.0
-```
-
-Реальні виміри (macOS, Apple Silicon, docker 29):
-
-| Метрика                | Fat                     | Slim                   |
-|------------------------|-------------------------|------------------------|
-| Розмір image           | **1.83 GB**             | **795 MB**             |
-| Кількість шарів        | 20                      | 16                     |
-| Час збірки (`--no-cache`, базовий Python-image закешовано) | 30.67 s | 40.64 s |
-| Найважчий власний шар  | ~644 MB (pip install)   | ~636 MB (COPY /install)|
-| Найважчий базовий шар  | ~641 MB (build-deps)    | ~100 MB (debian slim)  |
-| Inference top-3        | Labrador retriever ✅    | Labrador retriever ✅   |
-
-Детальний аналіз — у [`report.md`](./report.md).
-Сирі дані — у [`comparison.txt`](./comparison.txt).
-
----
-
-## Тестове зображення
-
-`example.jpg` — фото «Yellow Labrador looking» з Wikimedia Commons:
-<https://upload.wikimedia.org/wikipedia/commons/2/26/YellowLabradorLooking_new.jpg>
-
-Ліцензія: [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/).
-
-Завантажене командою:
-
-```bash
-curl -sSL -o example.jpg "https://upload.wikimedia.org/wikipedia/commons/2/26/YellowLabradorLooking_new.jpg"
-```
+ArgoCD видалить Applications, а разом з ними — release-и Helm.
