@@ -1,0 +1,58 @@
+# -----------------------------------------------------------------------------
+# GitLab CI/CD pipeline — MLOps HW10
+# -----------------------------------------------------------------------------
+# The pipeline reacts to a push on the `main` branch and starts an execution
+# of the AWS Step Functions state machine created via Terraform
+# (see ./terraform/).
+#
+# Required GitLab CI/CD variables (Settings → CI/CD → Variables):
+#   AWS_ACCESS_KEY_ID       — programmatic access key of the `gitlab-ci` IAM user
+#   AWS_SECRET_ACCESS_KEY   — corresponding secret access key (Mask + Protect)
+#   AWS_DEFAULT_REGION      — e.g. `eu-west-1`
+#   STATE_MACHINE_ARN       — full ARN of the MLOpsPipeline state machine,
+#                             e.g. arn:aws:states:eu-west-1:637512824156:stateMachine:MLOpsPipeline
+#
+# In a production project prefer OIDC federation between GitLab and AWS IAM
+# instead of static access keys (see README.md → "OIDC vs static keys").
+# -----------------------------------------------------------------------------
+
+stages:
+  - train
+
+train-model:
+  stage: train
+  image:
+    name: amazon/aws-cli:2.15.0
+    entrypoint: [""]
+  script:
+    - echo "🚀 Starting ML training pipeline via AWS Step Functions"
+    - echo "State machine ARN:  ${STATE_MACHINE_ARN}"
+    - echo "Commit:             ${CI_COMMIT_SHORT_SHA} (${CI_COMMIT_BRANCH})"
+    - echo "Pipeline:           ${CI_PIPELINE_ID}"
+    - |
+      # Build the JSON payload passed to the Step Functions execution.
+      # Every training run is traceable back to the exact commit / branch /
+      # pipeline / user that started it.
+      STEPFN_INPUT=$(printf '{"source":"gitlab-ci","commit":"%s","branch":"%s","pipeline_id":"%s","triggered_by":"%s"}' \
+        "${CI_COMMIT_SHORT_SHA}" \
+        "${CI_COMMIT_BRANCH}" \
+        "${CI_PIPELINE_ID}" \
+        "${GITLAB_USER_LOGIN}")
+      echo "Step Functions input: ${STEPFN_INPUT}"
+      EXECUTION_ARN=$(aws stepfunctions start-execution \
+        --state-machine-arn "${STATE_MACHINE_ARN}" \
+        --name "training-${CI_PIPELINE_ID}-$(date +%s)" \
+        --input "${STEPFN_INPUT}" \
+        --query 'executionArn' \
+        --output text)
+      echo "✅ Started execution: ${EXECUTION_ARN}"
+      echo "EXECUTION_ARN=${EXECUTION_ARN}" > execution.env
+  artifacts:
+    reports:
+      dotenv: execution.env
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: always

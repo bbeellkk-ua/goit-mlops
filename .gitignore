@@ -1,23 +1,38 @@
-# Python
+# ---------- Terraform ----------
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!terraform/*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
 .venv/
 venv/
 env/
+.pytest_cache/
 
-# Environment
-.env
-
-# MLflow local (на випадок локальних запусків без tracking server)
-mlruns/
-mlartifacts/
-
-# Best model artifacts (заповнюється скриптом train_and_push.py)
-best_model/*
-!best_model/.gitkeep
-
-# IDE / OS
+# ---------- Editors / OS ----------
 .DS_Store
 .idea/
 .vscode/
+
+# ---------- Lambda build artifacts ----------
+# By default we ignore zip artifacts, but the two Lambda archives required
+# by this homework are tracked explicitly so the repo stays self-contained
+# (see terraform/lambda/README).
+*.zip
+!terraform/lambda/validate.zip
+!terraform/lambda/log_metrics.zip
