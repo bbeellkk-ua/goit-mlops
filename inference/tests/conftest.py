@@ -52,6 +52,16 @@ def mlflow_env():
     mlflow.set_experiment("iris-it")
 
     X, y = load_iris(return_X_y=True, as_frame=True)
+    # Приводимо назви колонок до snake_case — так само як у training/train.py
+    # та як їх шле inference-ендпоінт (schemas.IrisFeatures).
+    X = X.rename(
+        columns={
+            "sepal length (cm)": "sepal_length",
+            "sepal width (cm)": "sepal_width",
+            "petal length (cm)": "petal_length",
+            "petal width (cm)": "petal_width",
+        }
+    )
     with mlflow.start_run() as run:
         model = LogisticRegression(max_iter=500)
         model.fit(X, y)
