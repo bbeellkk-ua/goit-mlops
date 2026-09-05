@@ -39,11 +39,24 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          nodeSelector:
+            node: infra
+          tolerations:
+            - key: node
+              operator: Equal
+              value: infra
+              effect: NoSchedule
+          workflowDefaults:
+            spec:
+              nodeSelector:
+                node: infra
+              tolerations:
+                - key: node
+                  operator: Equal
+                  value: infra
+                  effect: NoSchedule
         server:
           enabled: true
-          # UI експонується за Cloudflare Zero Trust Application (email/SSO)
-          # → ingress-nginx → argo-workflows-server. TLS — cert-manager
-          # (DNS-01). Локальний доступ також можливий через port-forward.
           serviceType: ClusterIP
           authModes:
             - server
@@ -68,6 +81,13 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
+          nodeSelector:
+            node: infra
+          tolerations:
+            - key: node
+              operator: Equal
+              value: infra
+              effect: NoSchedule
         # Використовуємо MinIO як artifact repository (той самий, що і в MLflow).
         artifactRepository:
           archiveLogs: true
