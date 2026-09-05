@@ -64,7 +64,13 @@ def test_metrics_endpoint_prometheus_format(client):
 
 
 def test_rate_limit(client):
-    # ліміт 5/min встановлено у conftest
+    # ліміт 5/min встановлено у conftest.
+    # Попередні тести уже витратили частину квоти на цю ж IP (testclient),
+    # тому обнуляємо in-memory storage лімітера перед перевіркою.
+    from app.main import app as _app
+
+    _app.state.limiter.reset()
+
     for _ in range(5):
         r = client.post("/predict", json={"instances": [_sample()]})
         assert r.status_code == 200
