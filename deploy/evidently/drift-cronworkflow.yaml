@@ -126,12 +126,12 @@ spec:
       outputs:
         artifacts:
           - name: current
-            path: /argo/outputs/current.parquet
+            path: /argo/current.parquet
       container:
         image: "{{workflow.parameters.evidently-image}}"
         imagePullPolicy: Always
         command: ["python", "drift_job.py"]
-        args: ["fetch", "--output", "/argo/outputs/current.parquet"]
+        args: ["fetch", "--output", "/argo/current.parquet"]
         env: &drift_env
           - name: MODEL_NAME
             value: "{{workflow.parameters.model-name}}"
@@ -176,10 +176,12 @@ spec:
             drop: [ALL]
           seccompProfile:
             type: RuntimeDefault
-        volumeMounts:
+        volumeMounts: &drift_mounts
           - {name: tmp, mountPath: /tmp}
-      volumes:
+          - {name: argo-work, mountPath: /argo}
+      volumes: &drift_volumes
         - {name: tmp, emptyDir: {}}
+        - {name: argo-work, emptyDir: {}}
 
     # ----------------- compute-drift (parquet → scores.json) --------------
     - name: compute-step
@@ -191,11 +193,11 @@ spec:
       inputs:
         artifacts:
           - name: current
-            path: /argo/inputs/current.parquet
+            path: /argo/current.parquet
       outputs:
         artifacts:
           - name: scores
-            path: /argo/outputs/scores.json
+            path: /argo/scores.json
       container:
         image: "{{workflow.parameters.evidently-image}}"
         imagePullPolicy: Always
@@ -203,18 +205,16 @@ spec:
         args:
           - "compute"
           - "--input"
-          - "/argo/inputs/current.parquet"
+          - "/argo/current.parquet"
           - "--output"
-          - "/argo/outputs/scores.json"
+          - "/argo/scores.json"
         env: *drift_env
         resources:
           requests: {cpu: 100m, memory: 256Mi}
           limits: {cpu: 500m, memory: 512Mi}
         securityContext: *drift_sec
-        volumeMounts:
-          - {name: tmp, mountPath: /tmp}
-      volumes:
-        - {name: tmp, emptyDir: {}}
+        volumeMounts: *drift_mounts
+      volumes: *drift_volumes
 
     # ----------------- publish (Pushgateway + audit) ----------------------
     - name: publish-step
@@ -232,21 +232,19 @@ spec:
       inputs:
         artifacts:
           - name: scores
-            path: /argo/inputs/scores.json
+            path: /argo/scores.json
       container:
         image: "{{workflow.parameters.evidently-image}}"
         imagePullPolicy: Always
         command: ["python", "drift_job.py"]
-        args: ["publish", "--input", "/argo/inputs/scores.json"]
+        args: ["publish", "--input", "/argo/scores.json"]
         env: *drift_env
         resources:
           requests: {cpu: 50m, memory: 128Mi}
           limits: {cpu: 200m, memory: 256Mi}
         securityContext: *drift_sec
-        volumeMounts:
-          - {name: tmp, mountPath: /tmp}
-      volumes:
-        - {name: tmp, emptyDir: {}}
+        volumeMounts: *drift_mounts
+      volumes: *drift_volumes
 ---
 # CronWorkflow — запускає iris-drift кожні 6 годин.
 # Заміна `batch/v1 CronJob` з збереженням тієї ж поведінки:
