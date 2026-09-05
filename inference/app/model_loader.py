@@ -112,9 +112,7 @@ def load_model(
                 )
             if actual != expected:
                 MODEL_READY.set(0)
-                raise ModelIntegrityError(
-                    f"Checksum mismatch: expected={expected} actual={actual}"
-                )
+                raise ModelIntegrityError(f"Checksum mismatch: expected={expected} actual={actual}")
             log.info(
                 "checksum_verified",
                 extra={"extra": {"event_action": "model.checksum_verified", "sha256": actual}},

@@ -13,7 +13,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 try:
@@ -57,7 +57,7 @@ def _bucket() -> str:
 
 def _key_prefix() -> str:
     env = os.environ.get("ENVIRONMENT", "staging")
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return f"predictions/{env}/{now:%Y/%m/%d}"
 
 
@@ -77,7 +77,7 @@ def sink_predictions(records: list[dict[str, Any]]) -> None:
         for r in records:
             buf.write((json.dumps(r, ensure_ascii=False) + "\n").encode("utf-8"))
         buf.seek(0)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         key = f"{_key_prefix()}/{now:%H%M%S}-{uuid.uuid4().hex[:8]}.jsonl"
         client.put_object(Bucket=_bucket(), Key=key, Body=buf.getvalue())
         log.info(

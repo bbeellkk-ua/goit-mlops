@@ -15,9 +15,6 @@ Security (Блок C):
   - модель завантажується з перевіркою SHA256 (`model_loader`).
 """
 
-from __future__ import annotations
-
-import logging
 import os
 import time
 import uuid
@@ -41,9 +38,9 @@ from .schemas import (
     CLASS_NAMES,
     HealthResponse,
     ModelInfoResponse,
+    Prediction,
     PredictRequest,
     PredictResponse,
-    Prediction,
 )
 
 log = configure_logging()

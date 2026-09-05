@@ -71,9 +71,7 @@ def mlflow_env():
         run_id=run_id, artifact_path="model", dst_path=td + "/dl"
     )
     checksum = _compute_local_sha256(Path(dl))
-    client.set_model_version_tag(
-        "iris-classifier-it", v.version, "checksum.sha256", checksum
-    )
+    client.set_model_version_tag("iris-classifier-it", v.version, "checksum.sha256", checksum)
     client.transition_model_version_stage(
         "iris-classifier-it", v.version, stage="Production", archive_existing_versions=False
     )
@@ -93,9 +91,8 @@ def client(mlflow_env):
         "app.predictions_sink",
     ]:
         sys.modules.pop(m, None)
-    from fastapi.testclient import TestClient
-
     from app.main import app  # noqa: E402
+    from fastapi.testclient import TestClient
 
     with TestClient(app) as c:
         yield c

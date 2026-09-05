@@ -8,10 +8,7 @@ Smoke integration-тест на train.main() — Блок F1.
 
 from __future__ import annotations
 
-import os
 import sys
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -55,9 +52,6 @@ def test_train_main_end_to_end(monkeypatch, tmp_path):
     assert versions, "Модель не зареєстрована"
     staging = [v for v in versions if v.current_stage == "Staging"]
     assert staging, "Немає Staging-версії"
-    tag_dict = {t.key: t.value for t in client.get_model_version(
-        name="iris-classifier-test", version=staging[0].version
-    ).tags} if hasattr(staging[0], "tags") else {}
     # SHA256 tag присутній
     mv = client.get_model_version(name="iris-classifier-test", version=staging[0].version)
     tags = mv.tags or {}

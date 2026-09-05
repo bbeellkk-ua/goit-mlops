@@ -29,9 +29,6 @@ import sys
 
 import mlflow
 import mlflow.sklearn
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, f1_score, log_loss
-
 from audit import audit_event, get_logger
 from mlflow_utils import build_client, compute_artifact_sha256, tag_model_version_checksum
 from preprocessing import (
@@ -41,6 +38,8 @@ from preprocessing import (
     split_dataset,
     summarize_dataset,
 )
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, log_loss
 
 log = get_logger("training")
 

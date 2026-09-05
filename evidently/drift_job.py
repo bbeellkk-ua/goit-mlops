@@ -108,7 +108,9 @@ def _list_recent_objects(s3, bucket: str, prefix: str, since: datetime) -> list[
         for obj in page.get("Contents", []):
             if obj["LastModified"].astimezone(UTC) >= since:
                 out.append(obj)
-    log.info(json.dumps({"event": "s3_list", "bucket": bucket, "prefix": prefix, "found": len(out)}))
+    log.info(
+        json.dumps({"event": "s3_list", "bucket": bucket, "prefix": prefix, "found": len(out)})
+    )
     return out
 
 
@@ -223,22 +225,30 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
     since = datetime.now(UTC) - timedelta(hours=lookback_hours)
 
-    log.info(json.dumps({
-        "event": "fetch_start",
-        "bucket": bucket,
-        "prefix": prefix,
-        "lookback_hours": lookback_hours,
-    }))
+    log.info(
+        json.dumps(
+            {
+                "event": "fetch_start",
+                "bucket": bucket,
+                "prefix": prefix,
+                "lookback_hours": lookback_hours,
+            }
+        )
+    )
 
     s3 = _s3_client()
     objects = _list_recent_objects(s3, bucket, prefix, since)
 
     if not objects:
-        log.warning(json.dumps({
-            "event": "no_predictions_found",
-            "prefix": prefix,
-            "since": since.isoformat(),
-        }))
+        log.warning(
+            json.dumps(
+                {
+                    "event": "no_predictions_found",
+                    "prefix": prefix,
+                    "since": since.isoformat(),
+                }
+            )
+        )
         df = _empty_current_df()
     else:
         df = _read_predictions(s3, bucket, objects)
@@ -317,15 +327,19 @@ def cmd_run(_: argparse.Namespace) -> int:
         "http://pushgateway-prometheus-pushgateway.monitoring.svc.cluster.local:9091",
     )
 
-    log.info(json.dumps({
-        "event": "start",
-        "mode": "monolith",
-        "model_name": model_name,
-        "environment": environment,
-        "bucket": bucket,
-        "prefix": prefix,
-        "lookback_hours": lookback_hours,
-    }))
+    log.info(
+        json.dumps(
+            {
+                "event": "start",
+                "mode": "monolith",
+                "model_name": model_name,
+                "environment": environment,
+                "bucket": bucket,
+                "prefix": prefix,
+                "lookback_hours": lookback_hours,
+            }
+        )
+    )
 
     since = datetime.now(UTC) - timedelta(hours=lookback_hours)
     reference = _load_reference()
@@ -333,11 +347,15 @@ def cmd_run(_: argparse.Namespace) -> int:
     objects = _list_recent_objects(s3, bucket, prefix, since)
 
     if not objects:
-        log.warning(json.dumps({
-            "event": "no_predictions_found",
-            "prefix": prefix,
-            "since": since.isoformat(),
-        }))
+        log.warning(
+            json.dumps(
+                {
+                    "event": "no_predictions_found",
+                    "prefix": prefix,
+                    "since": since.isoformat(),
+                }
+            )
+        )
         push_metrics(
             pushgateway_url,
             model_name,

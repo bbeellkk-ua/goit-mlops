@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 # Плагін-контейнер — імпортуємо з sys.path (додано у conftest)
 from app.schemas import IrisFeatures, PredictRequest
+from pydantic import ValidationError
 
 
 def test_iris_features_ok():

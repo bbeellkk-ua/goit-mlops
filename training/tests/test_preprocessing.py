@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-
 from preprocessing import (
     CLASS_NAMES,
     FEATURE_NAMES,
