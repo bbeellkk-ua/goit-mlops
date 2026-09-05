@@ -1,0 +1,185 @@
+---
+# WorkflowTemplate — in-cluster rollback моделі Production → попередня версія.
+#
+# Симетричний до iris-promote; викликає training/rollback.py.
+#
+# Використання:
+#   # автоматично — rollback на найновішу Archived-версію:
+#   argo -n mlops-system submit --from workflowtemplate/iris-rollback \
+#     -p actor="oleksandr" -p reason="v4 SLA breach — accuracy < 0.85"
+#
+#   # явно — на конкретну версію:
+#   argo -n mlops-system submit --from workflowtemplate/iris-rollback \
+#     -p to-version=3 \
+#     -p actor="oleksandr" -p reason="canary rollback"
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: iris-rollback
+  namespace: mlops-system
+  labels:
+    app.kubernetes.io/part-of: goit-mlops
+spec:
+  entrypoint: pipeline
+  serviceAccountName: training-sa
+  nodeSelector:
+    node: infra
+  tolerations:
+    - key: node
+      operator: Equal
+      value: infra
+      effect: NoSchedule
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 604800
+  podGC:
+    strategy: OnPodSuccess
+  arguments:
+    parameters:
+      - name: training-image
+        value: "ghcr.io/bbeellkk-ua/goit-mlops-training:latest"
+      - name: model
+        value: "iris-classifier"
+      - name: to-version
+        value: ""
+        description: "Target version. Empty = latest Archived."
+      - name: actor
+        value: "argo-ui"
+      - name: reason
+        value: "manual-rollback"
+
+  templates:
+    - name: pipeline
+      dag:
+        tasks:
+          - name: rollback
+            template: rollback-step
+            arguments:
+              parameters:
+                - {name: training-image, value: "{{workflow.parameters.training-image}}"}
+                - {name: model, value: "{{workflow.parameters.model}}"}
+                - {name: to-version, value: "{{workflow.parameters.to-version}}"}
+                - {name: actor, value: "{{workflow.parameters.actor}}"}
+                - {name: reason, value: "{{workflow.parameters.reason}}"}
+          - name: audit
+            template: audit-step
+            dependencies: [rollback]
+            arguments:
+              parameters:
+                - {name: model, value: "{{workflow.parameters.model}}"}
+                - {name: to-version, value: "{{workflow.parameters.to-version}}"}
+                - {name: actor, value: "{{workflow.parameters.actor}}"}
+                - {name: reason, value: "{{workflow.parameters.reason}}"}
+
+    - name: rollback-step
+      inputs:
+        parameters:
+          - {name: training-image}
+          - {name: model}
+          - {name: to-version}
+          - {name: actor}
+          - {name: reason}
+      metadata:
+        labels:
+          app: iris-rollback
+          part-of: goit-mlops
+      podSpecPatch: |
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+      container:
+        image: "{{inputs.parameters.training-image}}"
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -euo pipefail
+            cd /app
+            if [ -n "{{inputs.parameters.to-version}}" ]; then
+              exec python rollback.py \
+                --model "{{inputs.parameters.model}}" \
+                --to-version "{{inputs.parameters.to-version}}" \
+                --actor "{{inputs.parameters.actor}}" \
+                --reason "{{inputs.parameters.reason}}"
+            else
+              exec python rollback.py \
+                --model "{{inputs.parameters.model}}" \
+                --actor "{{inputs.parameters.actor}}" \
+                --reason "{{inputs.parameters.reason}}"
+            fi
+        env:
+          - name: MODEL_NAME
+            value: "{{inputs.parameters.model}}"
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlops-system.svc.cluster.local:5000"
+          - name: MLFLOW_S3_ENDPOINT_URL
+            value: "http://minio.mlops-system.svc.cluster.local:9000"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: training-s3
+                key: access_key_id
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: training-s3
+                key: secret_access_key
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 512Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+          - name: tmp
+            mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+    - name: audit-step
+      inputs:
+        parameters:
+          - {name: model}
+          - {name: to-version}
+          - {name: actor}
+          - {name: reason}
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: ["python", "-c"]
+        args:
+          - |
+            import json, time, os
+            payload = {
+                "event_category": "audit",
+                "event_action": "model.rolled_back",
+                "workflow_name": os.environ.get("WORKFLOW_NAME", ""),
+                "model": "{{inputs.parameters.model}}",
+                "to_version": "{{inputs.parameters.to-version}}" or "latest-archived",
+                "actor": "{{inputs.parameters.actor}}",
+                "reason": "{{inputs.parameters.reason}}",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            print(json.dumps(payload), flush=True)
+        env:
+          - name: WORKFLOW_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['workflows.argoproj.io/workflow']
+        resources:
+          requests: {cpu: 20m, memory: 64Mi}
+          limits: {cpu: 100m, memory: 128Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: [ALL]

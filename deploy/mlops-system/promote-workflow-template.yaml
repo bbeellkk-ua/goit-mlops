@@ -1,0 +1,214 @@
+---
+# WorkflowTemplate — in-cluster промоушен моделі Staging → Production.
+#
+# Мотивація:
+#   GitHub Actions runners не мають мережевого доступу до нашого приватного
+#   Kubernetes-кластера (немає public API endpoint, немає VPN на GHA side).
+#   Тому промоушен виконується у самому кластері, там де MLflow вже доступний
+#   як `mlflow.mlops-system.svc.cluster.local:5000`.
+#
+# Використання (з bastion / kubectl-доступу):
+#   argo -n mlops-system submit --from workflowtemplate/iris-promote \
+#     -p version=4 \
+#     -p actor="oleksandr" \
+#     -p reason="initial production go-live"
+#
+#   # або без версії — промоушен останньої Staging:
+#   argo -n mlops-system submit --from workflowtemplate/iris-promote \
+#     -p actor="oleksandr" -p reason="scheduled promo"
+#
+# Крізь Argo UI:
+#   /workflow-templates/mlops-system/iris-promote → SUBMIT → заповнити параметри.
+#
+# Кроки DAG:
+#   1) promote  — виконує training/promote.py; transitions версію у Production,
+#                  архівує стару Production (archive_existing_versions=true).
+#   2) audit    — читає JSON-подію з stdout попереднього кроку (в MLflow
+#                  transitionах вже пишеться audit_event), і додатково емітить
+#                  workflow-level подію (event_action=model.promoted).
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: iris-promote
+  namespace: mlops-system
+  labels:
+    app.kubernetes.io/part-of: goit-mlops
+spec:
+  entrypoint: pipeline
+  serviceAccountName: training-sa
+  nodeSelector:
+    node: infra
+  tolerations:
+    - key: node
+      operator: Equal
+      value: infra
+      effect: NoSchedule
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 604800
+  podGC:
+    strategy: OnPodSuccess
+  arguments:
+    parameters:
+      - name: training-image
+        value: "ghcr.io/bbeellkk-ua/goit-mlops-training:latest"
+      - name: model
+        value: "iris-classifier"
+      - name: version
+        value: ""
+        description: "Model version to promote (e.g. 4). Empty = latest Staging."
+      - name: actor
+        value: "argo-ui"
+        description: "Who initiated the promotion (audit)."
+      - name: reason
+        value: "manual-promotion"
+        description: "Reason for the promotion (audit)."
+
+  templates:
+    # ---------------- pipeline (DAG entrypoint) ---------------------------
+    - name: pipeline
+      dag:
+        tasks:
+          - name: promote
+            template: promote-step
+            arguments:
+              parameters:
+                - {name: training-image, value: "{{workflow.parameters.training-image}}"}
+                - {name: model, value: "{{workflow.parameters.model}}"}
+                - {name: version, value: "{{workflow.parameters.version}}"}
+                - {name: actor, value: "{{workflow.parameters.actor}}"}
+                - {name: reason, value: "{{workflow.parameters.reason}}"}
+          - name: audit
+            template: audit-step
+            dependencies: [promote]
+            arguments:
+              parameters:
+                - {name: model, value: "{{workflow.parameters.model}}"}
+                - {name: version, value: "{{workflow.parameters.version}}"}
+                - {name: actor, value: "{{workflow.parameters.actor}}"}
+                - {name: reason, value: "{{workflow.parameters.reason}}"}
+
+    # ---------------- promote (виконує promote.py) ------------------------
+    - name: promote-step
+      inputs:
+        parameters:
+          - {name: training-image}
+          - {name: model}
+          - {name: version}
+          - {name: actor}
+          - {name: reason}
+      metadata:
+        labels:
+          app: iris-promote
+          part-of: goit-mlops
+      podSpecPatch: |
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+      container:
+        image: "{{inputs.parameters.training-image}}"
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        # promote.py читає --version зі stdin argparse; якщо параметр порожній —
+        # не передаємо його, і скрипт сам візьме latest Staging.
+        args:
+          - |
+            set -euo pipefail
+            cd /app
+            if [ -n "{{inputs.parameters.version}}" ]; then
+              exec python promote.py \
+                --model "{{inputs.parameters.model}}" \
+                --version "{{inputs.parameters.version}}" \
+                --actor "{{inputs.parameters.actor}}" \
+                --reason "{{inputs.parameters.reason}}"
+            else
+              exec python promote.py \
+                --model "{{inputs.parameters.model}}" \
+                --actor "{{inputs.parameters.actor}}" \
+                --reason "{{inputs.parameters.reason}}"
+            fi
+        env:
+          - name: MODEL_NAME
+            value: "{{inputs.parameters.model}}"
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlops-system.svc.cluster.local:5000"
+          - name: MLFLOW_S3_ENDPOINT_URL
+            value: "http://minio.mlops-system.svc.cluster.local:9000"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: training-s3
+                key: access_key_id
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: training-s3
+                key: secret_access_key
+          - name: PROMOTE_ACTOR
+            value: "{{inputs.parameters.actor}}"
+          - name: PROMOTE_REASON
+            value: "{{inputs.parameters.reason}}"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+          - name: tmp
+            mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+    # ---------------- audit (workflow-level JSON у stdout → Loki) ---------
+    - name: audit-step
+      inputs:
+        parameters:
+          - {name: model}
+          - {name: version}
+          - {name: actor}
+          - {name: reason}
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: ["python", "-c"]
+        args:
+          - |
+            import json, time, os
+            payload = {
+                "event_category": "audit",
+                "event_action": "model.promoted",
+                "workflow_name": os.environ.get("WORKFLOW_NAME", ""),
+                "model": "{{inputs.parameters.model}}",
+                "version": "{{inputs.parameters.version}}" or "latest-staging",
+                "actor": "{{inputs.parameters.actor}}",
+                "reason": "{{inputs.parameters.reason}}",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            print(json.dumps(payload), flush=True)
+        env:
+          - name: WORKFLOW_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['workflows.argoproj.io/workflow']
+        resources:
+          requests: {cpu: 20m, memory: 64Mi}
+          limits: {cpu: 100m, memory: 128Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: [ALL]
