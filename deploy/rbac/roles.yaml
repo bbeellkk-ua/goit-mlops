@@ -155,6 +155,12 @@ rules:
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [patch]
+  - apiGroups: [argoproj.io]
+    resources: [workflowtaskresults]
+    verbs: [create, patch, get, list, watch]
   # Argo Workflows: submit + отримання статусу.
   - apiGroups: [argoproj.io]
     resources: [workflows, workflowtemplates, clusterworkflowtemplates]
