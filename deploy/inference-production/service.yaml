@@ -1,0 +1,83 @@
+---
+# Blue-Green switch service.
+#
+# The single Service `inference` is what the Ingress routes to. Traffic is
+# steered between blue and green Deployments purely by the `color` selector
+# below. To perform a switch:
+#
+#   1. `kubectl -n mlops-production scale deploy/inference-green --replicas=2`
+#      (or bump replicas via git commit; ArgoCD selfHeal will apply it).
+#   2. Wait until green pods report ready
+#      (`kubectl -n mlops-production rollout status deploy/inference-green`).
+#   3. Edit this file: change `spec.selector.color` from `blue` to `green`,
+#      change the annotation `mlops.goit/blue-green-active` to `green`,
+#      commit and push. ArgoCD flips the Service atomically.
+#   4. Verify traffic (RPS + latency + error rate on the new color).
+#   5. Scale the old (blue) Deployment down to 0.
+#
+# Rollback = git revert of the color-flipping commit.
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference
+  namespace: mlops-production
+  labels:
+    app: inference
+    environment: production
+  annotations:
+    mlops.goit/blue-green-active: "blue"
+spec:
+  type: ClusterIP
+  selector:
+    app: inference
+    environment: production
+    color: blue
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+---
+# "Preview" services that pin each color, useful for smoke-testing
+# a color before flipping the primary Service. Not exposed via Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-blue
+  namespace: mlops-production
+  labels:
+    app: inference
+    environment: production
+    color: blue
+spec:
+  type: ClusterIP
+  selector:
+    app: inference
+    environment: production
+    color: blue
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-green
+  namespace: mlops-production
+  labels:
+    app: inference
+    environment: production
+    color: green
+spec:
+  type: ClusterIP
+  selector:
+    app: inference
+    environment: production
+    color: green
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP

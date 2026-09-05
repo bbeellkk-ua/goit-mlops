@@ -1,0 +1,277 @@
+---
+# ClusterWorkflowTemplate — багатокроковий пайплайн тренування Iris-моделі.
+#
+# Порядок кроків:
+#   1) train                 — запускає training/train.py у контейнері `training`
+#                              (з тими самими env, що і колишній k8s Job).
+#   2) verify-registration   — читає MLflow REST API, підтверджує, що з’явилась
+#                              нова версія моделі та переведена у Staging.
+#   3) audit                 — пише JSON audit event (event_action=training.completed)
+#                              у stdout, який Promtail забирає у Loki.
+#
+# Артефакти кожного кроку archLogs → MinIO bucket `argo-workflows` (див.
+# argocd/apps/25-argo-workflows.yaml).
+#
+# Використання:
+#   kubectl create -f /tmp/train-workflow.yaml       # submit
+#   argo -n mlops-system list                        # моніторинг
+#   argo -n mlops-system logs @latest                # логи всіх steps
+#
+# Шаблон приймає параметри (ідентичні до колишнього k8s-job.tpl.yaml):
+#   training_image, git_commit, git_branch, dataset_version,
+#   lr_c, lr_max_iter, random_state, test_size, job_id.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: iris-train
+  namespace: mlops-system
+  labels:
+    app.kubernetes.io/part-of: goit-mlops
+spec:
+  entrypoint: pipeline
+  serviceAccountName: training-sa
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 604800
+  podGC:
+    strategy: OnPodSuccess
+  arguments:
+    parameters:
+      - name: training-image
+        value: "ghcr.io/bbeellkk-ua/goit-mlops-training:latest"
+      - name: git-commit
+        value: "unknown"
+      - name: git-branch
+        value: "final"
+      - name: dataset-version
+        value: "iris-sklearn-1"
+      - name: lr-c
+        value: "1.0"
+      - name: lr-max-iter
+        value: "200"
+      - name: random-state
+        value: "42"
+      - name: test-size
+        value: "0.2"
+      - name: job-id
+        value: "adhoc"
+
+  templates:
+    # ---------------- pipeline (DAG entrypoint) ---------------------------
+    - name: pipeline
+      dag:
+        tasks:
+          - name: train
+            template: train-step
+            arguments:
+              parameters:
+                - {name: training-image, value: "{{workflow.parameters.training-image}}"}
+                - {name: git-commit, value: "{{workflow.parameters.git-commit}}"}
+                - {name: git-branch, value: "{{workflow.parameters.git-branch}}"}
+                - {name: dataset-version, value: "{{workflow.parameters.dataset-version}}"}
+                - {name: lr-c, value: "{{workflow.parameters.lr-c}}"}
+                - {name: lr-max-iter, value: "{{workflow.parameters.lr-max-iter}}"}
+                - {name: random-state, value: "{{workflow.parameters.random-state}}"}
+                - {name: test-size, value: "{{workflow.parameters.test-size}}"}
+          - name: verify-registration
+            template: verify-step
+            dependencies: [train]
+          - name: audit
+            template: audit-step
+            dependencies: [verify-registration]
+            arguments:
+              parameters:
+                - {name: git-commit, value: "{{workflow.parameters.git-commit}}"}
+                - {name: git-branch, value: "{{workflow.parameters.git-branch}}"}
+                - {name: dataset-version, value: "{{workflow.parameters.dataset-version}}"}
+                - {name: job-id, value: "{{workflow.parameters.job-id}}"}
+
+    # ---------------- train (виконує train.py) ----------------------------
+    - name: train-step
+      inputs:
+        parameters:
+          - {name: training-image}
+          - {name: git-commit}
+          - {name: git-branch}
+          - {name: dataset-version}
+          - {name: lr-c}
+          - {name: lr-max-iter}
+          - {name: random-state}
+          - {name: test-size}
+      metadata:
+        labels:
+          app: iris-train
+          part-of: goit-mlops
+      podSpecPatch: |
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+      container:
+        image: "{{inputs.parameters.training-image}}"
+        imagePullPolicy: Always
+        command: ["python", "train.py"]
+        env:
+          - name: MODEL_NAME
+            value: "iris-classifier"
+          - name: MLFLOW_EXPERIMENT_NAME
+            value: "iris-training"
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlops-system.svc.cluster.local:5000"
+          - name: MLFLOW_S3_ENDPOINT_URL
+            value: "http://minio.mlops-system.svc.cluster.local:9000"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: training-s3
+                key: access_key_id
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: training-s3
+                key: secret_access_key
+          - name: GIT_COMMIT
+            value: "{{inputs.parameters.git-commit}}"
+          - name: GIT_BRANCH
+            value: "{{inputs.parameters.git-branch}}"
+          - name: DATASET_VERSION
+            value: "{{inputs.parameters.dataset-version}}"
+          - name: LR_C
+            value: "{{inputs.parameters.lr-c}}"
+          - name: LR_MAX_ITER
+            value: "{{inputs.parameters.lr-max-iter}}"
+          - name: RANDOM_STATE
+            value: "{{inputs.parameters.random-state}}"
+          - name: TEST_SIZE
+            value: "{{inputs.parameters.test-size}}"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+          - name: tmp
+            mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+    # ---------------- verify-registration (перевіряє MLflow) --------------
+    # Використовуємо той самий training-образ (у нього є mlflow-python), але
+    # запускаємо inline-скрипт, який робить REST-виклик до MLflow.
+    - name: verify-step
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: ["python", "-c"]
+        args:
+          - |
+            import os, sys, time
+            import mlflow
+            from mlflow.tracking import MlflowClient
+            mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+            c = MlflowClient()
+            for attempt in range(10):
+                try:
+                    versions = c.search_model_versions("name='iris-classifier'")
+                    if not versions:
+                        raise RuntimeError("no versions yet")
+                    latest = max(versions, key=lambda v: int(v.version))
+                    print(f"latest version={latest.version} stage={latest.current_stage}", flush=True)
+                    if latest.current_stage != "Staging":
+                        raise RuntimeError(f"expected Staging, got {latest.current_stage}")
+                    print("OK — verify-registration passed", flush=True)
+                    sys.exit(0)
+                except Exception as exc:
+                    print(f"[attempt {attempt+1}/10] {exc}", flush=True)
+                    time.sleep(3)
+            sys.exit(2)
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlops-system.svc.cluster.local:5000"
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 200m, memory: 256Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: [ALL]
+
+    # ---------------- audit (JSON-подія у stdout → Loki) ------------------
+    - name: audit-step
+      inputs:
+        parameters:
+          - {name: git-commit}
+          - {name: git-branch}
+          - {name: dataset-version}
+          - {name: job-id}
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: ["python", "-c"]
+        args:
+          - |
+            import json, time, os
+            payload = {
+                "event_category": "training",
+                "event_action": "training.completed",
+                "workflow_name": os.environ.get("WORKFLOW_NAME", ""),
+                "job_id": "{{inputs.parameters.job-id}}",
+                "git_commit": "{{inputs.parameters.git-commit}}",
+                "git_branch": "{{inputs.parameters.git-branch}}",
+                "dataset_version": "{{inputs.parameters.dataset-version}}",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            print(json.dumps(payload), flush=True)
+        env:
+          - name: WORKFLOW_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['workflows.argoproj.io/workflow']
+        resources:
+          requests: {cpu: 20m, memory: 64Mi}
+          limits: {cpu: 100m, memory: 128Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: [ALL]
+---
+# Секрет для доступу training/argo-workflows steps до MinIO. У реальному
+# кластері має бути SealedSecret; тут — плоский Secret тільки для
+# скорочення scope завдання (див. THREAT_MODEL.md, T3).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: training-s3
+  namespace: mlops-system
+type: Opaque
+stringData:
+  access_key_id: "minio"
+  secret_access_key: "minio123"
+---
+# Той самий Secret для Argo Workflows artifact repository (див.
+# argocd/apps/25-argo-workflows.yaml → artifactRepository.s3).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-workflows-s3
+  namespace: argo
+type: Opaque
+stringData:
+  access_key_id: "minio"
+  secret_access_key: "minio123"

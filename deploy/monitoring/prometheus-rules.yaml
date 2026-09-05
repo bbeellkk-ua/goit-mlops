@@ -1,0 +1,135 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mlops-inference
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: goit-mlops
+spec:
+  groups:
+    - name: mlops.inference.availability
+      interval: 30s
+      rules:
+        - alert: MLOpsInferenceModelNotReady
+          expr: |
+            max by (namespace, service) (inference_model_ready) == 0
+          for: 5m
+          labels:
+            severity: critical
+            component: mlops-inference
+          annotations:
+            summary: "Inference model not ready in {{ $labels.namespace }}"
+            description: |
+              inference_model_ready == 0 for 5m in namespace {{ $labels.namespace }}.
+              The pod failed to load the model or the SHA256 checksum did not match.
+              Check `kubectl -n {{ $labels.namespace }} logs -l app=inference --tail=200`
+              and look for `ModelIntegrityError`.
+            runbook_url: "https://github.com/bbeellkk-ua/goit-mlops/blob/final/RUNBOOK.md#model-not-ready"
+
+        - alert: MLOpsInferenceAbsent
+          expr: |
+            absent(up{job=~".*inference.*"}) == 1
+          for: 10m
+          labels:
+            severity: critical
+            component: mlops-inference
+          annotations:
+            summary: "No inference targets are being scraped"
+            description: >
+              Prometheus has no `up` samples for any inference target for 10m.
+              Check ServiceMonitor selectors and pod labels.
+
+    - name: mlops.inference.latency
+      interval: 30s
+      rules:
+        - alert: MLOpsInferenceHighLatency
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le, namespace) (
+                rate(inference_request_duration_seconds_bucket{endpoint="/predict"}[5m])
+              )
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            component: mlops-inference
+          annotations:
+            summary: "p95 latency > 500ms in {{ $labels.namespace }}"
+            description: |
+              /predict p95 latency has been above 500ms for 5m.
+              Investigate CPU throttling, GC, or model-load stalls.
+            runbook_url: "https://github.com/bbeellkk-ua/goit-mlops/blob/final/RUNBOOK.md#high-latency"
+
+    - name: mlops.inference.errors
+      interval: 30s
+      rules:
+        - alert: MLOpsInferenceHighErrorRate
+          expr: |
+            (
+              sum by (namespace) (
+                rate(inference_requests_total{status=~"5..|4.."}[5m])
+              )
+              /
+              sum by (namespace) (
+                rate(inference_requests_total[5m])
+              )
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+            component: mlops-inference
+          annotations:
+            summary: "Error rate > 1% in {{ $labels.namespace }}"
+            description: |
+              More than 1% of inference requests returned 4xx/5xx over 5m.
+              Check for schema-validation spikes (400) or model failures (5xx).
+            runbook_url: "https://github.com/bbeellkk-ua/goit-mlops/blob/final/RUNBOOK.md#high-error-rate"
+
+        - alert: MLOpsInferenceRateLimited
+          expr: |
+            sum by (namespace) (
+              rate(inference_requests_total{status="429"}[5m])
+            ) > 0
+          for: 10m
+          labels:
+            severity: info
+            component: mlops-inference
+          annotations:
+            summary: "Rate limiter (429) firing in {{ $labels.namespace }}"
+            description: >
+              Slowapi is rejecting clients. Either expected traffic burst or
+              possible abusive client. Cross-check with ingress source-IP logs.
+
+    - name: mlops.model.drift
+      interval: 60s
+      rules:
+        - alert: MLOpsDriftDetected
+          expr: |
+            max by (model_name, environment) (mlops_drift_score) > 0.3
+          for: 15m
+          labels:
+            severity: warning
+            component: mlops-drift
+          annotations:
+            summary: "Drift score > 0.3 for {{ $labels.model_name }} ({{ $labels.environment }})"
+            description: |
+              The Evidently CronJob reports mlops_drift_score above 0.3
+              (PSI) for 15 minutes. Consider retraining and promoting a
+              new model version.
+            runbook_url: "https://github.com/bbeellkk-ua/goit-mlops/blob/final/RUNBOOK.md#drift-detected"
+
+        - alert: MLOpsDriftJobStale
+          expr: |
+            (time() - max by (model_name) (mlops_drift_last_run_timestamp_seconds)) > 21600
+          for: 10m
+          labels:
+            severity: warning
+            component: mlops-drift
+          annotations:
+            summary: "Drift job has not reported for >6h"
+            description: >
+              The Evidently CronJob is scheduled every 6h. If we do not see
+              a fresh push to Pushgateway within 6h + 10min, the job is stuck.

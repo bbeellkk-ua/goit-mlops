@@ -1,0 +1,7 @@
+evidently==0.4.33
+mlflow==2.16.2
+scikit-learn==1.5.2
+pandas==2.2.3
+numpy==1.26.4
+boto3==1.35.36
+prometheus-client==0.20.0

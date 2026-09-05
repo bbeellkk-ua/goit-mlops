@@ -1,0 +1,137 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-blue
+  namespace: mlops-production
+  labels:
+    app: inference
+    environment: production
+    color: blue
+    app.kubernetes.io/name: inference
+    app.kubernetes.io/part-of: goit-mlops
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: inference
+      environment: production
+      color: blue
+  template:
+    metadata:
+      labels:
+        app: inference
+        environment: production
+        color: blue
+        app.kubernetes.io/name: inference
+        app.kubernetes.io/part-of: goit-mlops
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: inference-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: inference
+          image: ghcr.io/bbeellkk-ua/goit-mlops-inference:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: APP_ENVIRONMENT
+              value: "production"
+            - name: APP_VERSION
+              value: "0.1.0"
+            - name: DEPLOYMENT_COLOR
+              value: "blue"
+            - name: MODEL_NAME
+              value: "iris-classifier"
+            - name: MODEL_STAGE
+              value: "Production"
+            - name: REQUIRE_CHECKSUM
+              value: "true"
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow.mlops-system.svc.cluster.local:5000"
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: "http://minio.mlops-system.svc.cluster.local:9000"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: inference-s3
+                  key: access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: inference-s3
+                  key: secret_access_key
+            - name: PREDICTIONS_SINK_BUCKET
+              value: "mlflow-artifacts"
+            - name: PREDICTIONS_SINK_PREFIX
+              value: "predictions/production/blue"
+            - name: REQUESTS_PER_MINUTE
+              value: "60"
+            - name: LOG_LEVEL
+              value: "INFO"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "384Mi"
+            limits:
+              cpu: "1000m"
+              memory: "768Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: mlflow-cache
+              mountPath: /home/appuser/.cache/mlflow
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: mlflow-cache
+          emptyDir: {}

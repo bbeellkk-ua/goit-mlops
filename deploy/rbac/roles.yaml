@@ -1,0 +1,166 @@
+# RBAC — Блок C3.
+#
+# mlops-engineer:
+#   * mlops-system  — повний адмін (bootstrap-налагодження);
+#   * mlops-staging — повний адмін (експериментує);
+#   * mlops-production — тільки get/list/watch + patch на Service (Blue-Green switch);
+#     жодних `delete` на Deployment, жодних exec на pod у prod.
+#
+# mlops-viewer:
+#   * усе — read-only (get/list/watch).
+#
+# inference-sa:
+#   * у своєму namespace може читати ConfigMap/Secret, потрібне для startup.
+#
+# training-sa:
+#   * у mlops-system може створювати Job/PodLog у своєму namespace
+#     (щоб бачити логи у самому джобі).
+
+# ---- Role: viewer (read-only) --------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mlops-viewer
+  labels: {part-of: goit-mlops}
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - configmaps
+      - events
+      - namespaces
+      - persistentvolumeclaims
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, list, watch]
+  - apiGroups: [monitoring.coreos.com]
+    resources: [servicemonitors, prometheusrules]
+    verbs: [get, list, watch]
+
+# ---- Role: engineer full (staging + system) ------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mlops-engineer-full
+  namespace: mlops-staging
+  labels: {part-of: goit-mlops}
+rules:
+  - apiGroups: ["", apps, batch, networking.k8s.io, autoscaling]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [monitoring.coreos.com]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mlops-engineer-full
+  namespace: mlops-system
+  labels: {part-of: goit-mlops}
+rules:
+  - apiGroups: ["", apps, batch, networking.k8s.io, autoscaling]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [monitoring.coreos.com]
+    resources: ["*"]
+    verbs: ["*"]
+
+# ---- Role: engineer restricted (production) ------------------------------
+# * READ everything
+# * WRITE тільки на Service (щоб перемикнути Blue-Green selector) і Ingress
+# * EXPLICITLY заборонено: delete на deployment/pod/statefulset, exec/attach
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mlops-engineer-prod-restricted
+  namespace: mlops-production
+  labels: {part-of: goit-mlops}
+rules:
+  # read-only базовий рівень
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, configmaps, events, persistentvolumeclaims]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  # write — тільки Service та Ingress для управління трафіком.
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, update, patch]
+
+# ---- Role: inference-sa (мінімум) ----------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: inference-runtime
+  namespace: mlops-staging
+  labels: {part-of: goit-mlops}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: inference-runtime
+  namespace: mlops-production
+  labels: {part-of: goit-mlops}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch]
+
+# ---- Role: training-sa (Argo Workflow у mlops-system) ---------------------
+# Тренування виконується як `Workflow` (див. deploy/mlops-system/train-workflow-template.yaml)
+# — training-sa має право створювати Workflow, читати їхній стан, а також читати
+# власні Pod-логи (щоб `argo logs` працював).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: training-runtime
+  namespace: mlops-system
+  labels: {part-of: goit-mlops}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
+  # Argo Workflows: submit + отримання статусу.
+  - apiGroups: [argoproj.io]
+    resources: [workflows, workflowtemplates, clusterworkflowtemplates]
+    verbs: [get, list, watch, create]
+  # Джоби залишаємо на випадок fallback (evidently CronJob формально теж
+  # створює Jobs у mlops-system).
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create]

@@ -1,0 +1,95 @@
+---
+# Argo Workflows — контролер для пайплайнів тренування.
+# Встановлюється як Helm-реліз через ArgoCD у namespace `argo`.
+#
+# Чому окрема Application (не app-of-apps через 20-mlops-system): бо Helm-джерело,
+# а не kubectl-манифести — простіше тримати як самостійний ArgoCD Application.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mlops-argo-workflows
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-workflows
+    targetRevision: 0.42.3
+    helm:
+      releaseName: argo-workflows
+      valueFiles: []
+      values: |
+        # Мінімальна production-конфігурація: один controller + один server.
+        # У локальному k3s кластері не піднімаємо metrics-агрегацію окремо —
+        # kube-prometheus-stack підбере ServiceMonitor.
+        controller:
+          workflowNamespaces:
+            - mlops-system
+          metricsConfig:
+            enabled: true
+          # RBAC — controller управляє workflows у mlops-system.
+          workflowRestrictions:
+            templateReferencing: Strict
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        server:
+          enabled: true
+          # UI експонується за Cloudflare Zero Trust Application (email/SSO)
+          # → ingress-nginx → argo-workflows-server. TLS — cert-manager
+          # (DNS-01). Локальний доступ також можливий через port-forward.
+          serviceType: ClusterIP
+          authModes:
+            - server
+          ingress:
+            enabled: true
+            ingressClassName: nginx
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-dns01
+            hosts:
+              - argo.squirell.pp.ua
+            paths:
+              - /
+            pathType: Prefix
+            tls:
+              - secretName: argo-workflows-server-tls
+                hosts:
+                  - argo.squirell.pp.ua
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+        # Використовуємо MinIO як artifact repository (той самий, що і в MLflow).
+        artifactRepository:
+          archiveLogs: true
+          s3:
+            endpoint: minio.mlops-system.svc.cluster.local:9000
+            bucket: argo-workflows
+            insecure: true
+            accessKeySecret:
+              name: argo-workflows-s3
+              key: access_key_id
+            secretKeySecret:
+              name: argo-workflows-s3
+              key: secret_access_key
+        # Використовуємо CRD-based sink на Prometheus (kube-prometheus-stack підхопить).
+        useDefaultArtifactRepo: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

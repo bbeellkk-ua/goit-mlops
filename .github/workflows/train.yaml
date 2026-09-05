@@ -1,0 +1,102 @@
+---
+name: mlops-train
+
+# Тренування Iris-моделі як багатокроковий Argo Workflow (train → verify-registration
+# → audit). WorkflowTemplate живе у кластері (див. deploy/mlops-system/train-workflow-template.yaml);
+# цей workflow лише робить submission з CLI-параметрами.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lr_c:
+        description: "Regularisation strength (LogisticRegression `C`)"
+        default: "1.0"
+      lr_max_iter:
+        description: "max_iter"
+        default: "200"
+      random_state:
+        description: "random_state"
+        default: "42"
+      test_size:
+        description: "test_size"
+        default: "0.2"
+      dataset_version:
+        description: "Dataset version tag (free-form)"
+        default: "iris-sklearn-1"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    env:
+      ARGO_VERSION: v3.5.10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+      - name: Install argo CLI
+        run: |
+          curl -sSL -o /tmp/argo.gz "https://github.com/argoproj/argo-workflows/releases/download/${ARGO_VERSION}/argo-linux-amd64.gz"
+          gunzip /tmp/argo.gz
+          chmod +x /tmp/argo
+          sudo mv /tmp/argo /usr/local/bin/argo
+          argo version --short
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          if [ -z "$KUBECONFIG_B64" ]; then
+            echo "KUBECONFIG_B64 secret is missing" >&2
+            exit 1
+          fi
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_B64" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl version --client
+      - name: Render Workflow manifest
+        env:
+          JOB_ID: ${{ github.run_id }}
+          GIT_COMMIT: ${{ github.sha }}
+          GIT_BRANCH: ${{ github.ref_name }}
+          DATASET_VERSION: ${{ inputs.dataset_version }}
+          LR_C: ${{ inputs.lr_c }}
+          LR_MAX_ITER: ${{ inputs.lr_max_iter }}
+          RANDOM_STATE: ${{ inputs.random_state }}
+          TEST_SIZE: ${{ inputs.test_size }}
+        run: |
+          SHORT_SHA="$(echo "$GIT_COMMIT" | cut -c1-7)"
+          TRAINING_IMAGE_SHORT="ghcr.io/bbeellkk-ua/goit-mlops-training:sha-${SHORT_SHA}"
+          sed \
+            -e "s|__JOB_ID__|${JOB_ID}|g" \
+            -e "s|__GIT_COMMIT__|${GIT_COMMIT}|g" \
+            -e "s|__GIT_BRANCH__|${GIT_BRANCH}|g" \
+            -e "s|__DATASET_VERSION__|${DATASET_VERSION}|g" \
+            -e "s|__LR_C__|${LR_C}|g" \
+            -e "s|__LR_MAX_ITER__|${LR_MAX_ITER}|g" \
+            -e "s|__RANDOM_STATE__|${RANDOM_STATE}|g" \
+            -e "s|__TEST_SIZE__|${TEST_SIZE}|g" \
+            -e "s|__TRAINING_IMAGE__|${TRAINING_IMAGE_SHORT}|g" \
+            goit-mlops/training/train-workflow.tpl.yaml > /tmp/train-workflow.yaml
+          echo "---- rendered Workflow ----"
+          cat /tmp/train-workflow.yaml
+      - name: Submit Workflow
+        id: submit
+        run: |
+          WF_NAME=$(kubectl create -f /tmp/train-workflow.yaml -o jsonpath='{.metadata.name}')
+          echo "workflow=${WF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Submitted: ${WF_NAME}"
+      - name: Wait for Workflow to complete
+        run: |
+          argo -n mlops-system wait "${{ steps.submit.outputs.workflow }}" --timeout 15m
+      - name: Fetch Workflow logs
+        if: always()
+        run: |
+          echo "---- argo status ----"
+          argo -n mlops-system get "${{ steps.submit.outputs.workflow }}" || true
+          echo "---- argo logs ----"
+          argo -n mlops-system logs "${{ steps.submit.outputs.workflow }}" --tail=500 || true

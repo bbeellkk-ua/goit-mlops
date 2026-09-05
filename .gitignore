@@ -1,23 +1,37 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 .venv/
 venv/
-env/
 
-# Environment
+# Env
 .env
+.env.local
+*.env.local
 
-# MLflow local (на випадок локальних запусків без tracking server)
-mlruns/
-mlartifacts/
-
-# Best model artifacts (заповнюється скриптом train_and_push.py)
-best_model/*
-!best_model/.gitkeep
-
-# IDE / OS
-.DS_Store
-.idea/
+# IDE
 .vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local artifacts
+best_model/
+mlruns/
+*.pkl
+*.joblib
+
+# Terraform (не використовується у фінальному проєкті)
+*.tfstate
+*.tfstate.*
+.terraform/

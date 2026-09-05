@@ -1,0 +1,109 @@
+# RoleBindings/ClusterRoleBindings для Block C3.
+---
+# Viewer — читає у всіх трьох namespace + ArgoCD applications.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mlops-viewer
+  labels: {part-of: goit-mlops}
+subjects:
+  - kind: ServiceAccount
+    name: mlops-viewer
+    namespace: mlops-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlops-viewer
+---
+# Engineer — full у staging
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mlops-engineer-staging
+  namespace: mlops-staging
+  labels: {part-of: goit-mlops}
+subjects:
+  - kind: ServiceAccount
+    name: mlops-engineer
+    namespace: mlops-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mlops-engineer-full
+---
+# Engineer — full у mlops-system
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mlops-engineer-system
+  namespace: mlops-system
+  labels: {part-of: goit-mlops}
+subjects:
+  - kind: ServiceAccount
+    name: mlops-engineer
+    namespace: mlops-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mlops-engineer-full
+---
+# Engineer — RESTRICTED у production (тільки Service/Ingress + read)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mlops-engineer-prod
+  namespace: mlops-production
+  labels: {part-of: goit-mlops}
+subjects:
+  - kind: ServiceAccount
+    name: mlops-engineer
+    namespace: mlops-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mlops-engineer-prod-restricted
+---
+# inference-sa runtime binding у staging
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: inference-runtime
+  namespace: mlops-staging
+subjects:
+  - kind: ServiceAccount
+    name: inference-sa
+    namespace: mlops-staging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: inference-runtime
+---
+# inference-sa runtime binding у production
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: inference-runtime
+  namespace: mlops-production
+subjects:
+  - kind: ServiceAccount
+    name: inference-sa
+    namespace: mlops-production
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: inference-runtime
+---
+# training-sa
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: training-runtime
+  namespace: mlops-system
+subjects:
+  - kind: ServiceAccount
+    name: training-sa
+    namespace: mlops-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: training-runtime

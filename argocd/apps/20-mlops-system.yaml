@@ -1,0 +1,26 @@
+---
+# App-of-Apps: this Application applies the four inner Applications
+# (minio, mlflow-postgres, mlflow, pushgateway) from deploy/mlops-system/.
+# Argo creates each child in namespace `argocd` (they are Applications, not workloads).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mlops-system
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/bbeellkk-ua/goit-mlops.git
+    targetRevision: final
+    path: deploy/mlops-system
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

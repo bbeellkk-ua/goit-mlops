@@ -1,0 +1,82 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mlflow
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://community-charts.github.io/helm-charts
+    chart: mlflow
+    targetRevision: 1.6.2
+    helm:
+      releaseName: mlflow
+      values: |
+        service:
+          type: ClusterIP
+          port: 5000
+        auth:
+          enabled: false
+        postgresql:
+          enabled: false
+        backendStore:
+          existingDatabaseHost: mlflow-postgres-postgresql.mlops-system.svc.cluster.local
+          existingDatabasePort: 5432
+          existingDatabaseName: mlflow
+          existingDatabaseUser: mlflow
+          existingDatabasePassword: mlflowpass
+        artifactRoot:
+          s3:
+            enabled: true
+            bucket: mlflow-artifacts
+            awsAccessKeyId: minio
+            awsSecretAccessKey: minio123
+            defaultRegion: us-east-1
+        extraEnvVars:
+          AWS_ACCESS_KEY_ID: "minio"
+          AWS_SECRET_ACCESS_KEY: "minio123"
+          MLFLOW_S3_ENDPOINT_URL: "http://minio.mlops-system.svc.cluster.local:9000"
+          MLFLOW_BACKEND_STORE_URI: "postgresql://mlflow:mlflowpass@mlflow-postgres-postgresql.mlops-system.svc.cluster.local:5432/mlflow"
+          MLFLOW_ARTIFACT_ROOT: "s3://mlflow-artifacts"
+        extraArgs:
+          backend-store-uri: "$(MLFLOW_BACKEND_STORE_URI)"
+          default-artifact-root: "$(MLFLOW_ARTIFACT_ROOT)"
+          host: "0.0.0.0"
+          port: "5000"
+        # Ingress публікує MLflow за Cloudflare Zero Trust Application
+        # (email/SSO). TLS — cert-manager + DNS-01 ClusterIssuer.
+        ingress:
+          enabled: true
+          className: nginx
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-dns01
+            nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+          hosts:
+            - host: mlflow.squirell.pp.ua
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: mlflow-tls
+              hosts:
+                - mlflow.squirell.pp.ua
+        nodeSelector:
+          node: infra
+        tolerations:
+          - key: node
+            operator: Equal
+            value: infra
+            effect: NoSchedule
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mlops-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

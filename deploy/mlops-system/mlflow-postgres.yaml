@@ -1,0 +1,57 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mlflow-postgres
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: postgresql
+    targetRevision: 12.5.6
+    helm:
+      releaseName: mlflow-postgres
+      values: |
+        global:
+          imageRegistry: docker.io
+          security:
+            allowInsecureImages: true
+        image:
+          registry: docker.io
+          repository: bitnamilegacy/postgresql
+        volumePermissions:
+          image:
+            registry: docker.io
+            repository: bitnamilegacy/os-shell
+        metrics:
+          image:
+            registry: docker.io
+            repository: bitnamilegacy/postgres-exporter
+        auth:
+          username: mlflow
+          password: mlflowpass
+          database: mlflow
+          postgresPassword: postgresadmin
+        primary:
+          persistence:
+            enabled: false
+          nodeSelector:
+            node: infra
+          tolerations:
+            - key: node
+              operator: Equal
+              value: infra
+              effect: NoSchedule
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mlops-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

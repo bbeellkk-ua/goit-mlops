@@ -1,0 +1,29 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "C4",  # comprehensions
+    "SIM", # simplify
+]
+ignore = [
+    "E501",  # line-too-long — line-length сам обробляє
+    "B008",  # function calls in argument defaults (FastAPI Depends)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101"]  # asserts у тестах OK
+
+[tool.pytest.ini_options]
+testpaths = ["training/tests", "inference/tests"]
+addopts = "-ra --strict-markers -q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

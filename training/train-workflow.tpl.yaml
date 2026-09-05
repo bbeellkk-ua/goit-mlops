@@ -1,0 +1,44 @@
+---
+# Argo Workflow submission.
+# CI підставляє __X__ плейсхолдери через `sed` і робить `kubectl create -f`.
+#
+# Це `kind: Workflow` (окремий інстанс), який посилається на
+# `WorkflowTemplate/iris-train`, задекларований у
+# deploy/mlops-system/train-workflow-template.yaml.
+#
+# Використання (у CI):
+#   sed -e "s|__JOB_ID__|${JOB_ID}|g" ... > /tmp/wf.yaml
+#   kubectl create -f /tmp/wf.yaml
+#   argo -n mlops-system wait "@latest" --status Succeeded --timeout 15m
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: iris-train-__JOB_ID__-
+  namespace: mlops-system
+  labels:
+    app: iris-train
+    git-commit: "__GIT_COMMIT__"
+    part-of: goit-mlops
+spec:
+  workflowTemplateRef:
+    name: iris-train
+  arguments:
+    parameters:
+      - name: training-image
+        value: "__TRAINING_IMAGE__"
+      - name: git-commit
+        value: "__GIT_COMMIT__"
+      - name: git-branch
+        value: "__GIT_BRANCH__"
+      - name: dataset-version
+        value: "__DATASET_VERSION__"
+      - name: lr-c
+        value: "__LR_C__"
+      - name: lr-max-iter
+        value: "__LR_MAX_ITER__"
+      - name: random-state
+        value: "__RANDOM_STATE__"
+      - name: test-size
+        value: "__TEST_SIZE__"
+      - name: job-id
+        value: "__JOB_ID__"

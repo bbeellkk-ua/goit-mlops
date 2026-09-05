@@ -1,0 +1,268 @@
+---
+# Argo Workflows-нативна drift-детекція. Замінює сусідній CronJob
+# `mlops-drift` (batch/v1) на CronWorkflow + WorkflowTemplate, щоб мати:
+#   - DAG з трьома окремими pod-ами (fetch → compute → publish) і
+#     наочною діаграмою в Argo UI (`argo.squirell.pp.ua`);
+#   - artefact-passing через MinIO (той самий bucket `argo-workflows`,
+#     що і в training pipeline) — parquet + json-scores зберігаються
+#     як версіоновані артефакти на кожен запуск;
+#   - окремі логи на кожен крок → простіше post-mortem, ніж bash-хвіст
+#     у монолітному Job;
+#   - retry на рівні кроку (fetch може retry-нути через мережеву помилку
+#     MinIO, не перезапускаючи compute);
+#   - уніфікацію з `iris-train` (той самий SA/namespace/patterns).
+#
+# ArgoCD Application `mlops-evidently` (argocd/apps/60-evidently.yaml)
+# синхронізує цю теку у namespace `mlops-system`. Argo Workflows
+# controller дивиться на `workflowNamespaces: [mlops-system]` (див.
+# argocd/apps/25-argo-workflows.yaml), тому CronWorkflow виконується
+# правильно.
+#
+# ADR: див. ADR-005 у ADR.md.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evidently-sa
+  namespace: mlops-system
+  labels:
+    app.kubernetes.io/name: mlops-drift
+    app.kubernetes.io/part-of: goit-mlops
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: evidently-s3
+  namespace: mlops-system
+  labels:
+    app.kubernetes.io/part-of: goit-mlops
+type: Opaque
+stringData:
+  access_key_id: "minio"
+  secret_access_key: "minio123"
+---
+# WorkflowTemplate — версіонована специфікація drift DAG.
+# Викликається CronWorkflow нижче та може бути запущена руками через
+#   argo -n mlops-system submit --from workflowtemplate/iris-drift
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: iris-drift
+  namespace: mlops-system
+  labels:
+    app.kubernetes.io/name: mlops-drift
+    app.kubernetes.io/part-of: goit-mlops
+spec:
+  entrypoint: pipeline
+  serviceAccountName: evidently-sa
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 604800
+  podGC:
+    strategy: OnPodSuccess
+  arguments:
+    parameters:
+      - name: evidently-image
+        value: "ghcr.io/bbeellkk-ua/goit-mlops-evidently:latest"
+      - name: model-name
+        value: "iris-classifier"
+      - name: environment
+        value: "production"
+      - name: predictions-bucket
+        value: "mlflow-artifacts"
+      - name: predictions-prefix
+        value: "predictions/production/"
+      - name: lookback-hours
+        value: "24"
+
+  templates:
+    # ----------------- pipeline (DAG entrypoint) --------------------------
+    - name: pipeline
+      dag:
+        tasks:
+          - name: fetch-predictions
+            template: fetch-step
+          - name: compute-drift
+            template: compute-step
+            dependencies: [fetch-predictions]
+            arguments:
+              artifacts:
+                - name: current
+                  from: "{{tasks.fetch-predictions.outputs.artifacts.current}}"
+          - name: publish
+            template: publish-step
+            dependencies: [compute-drift]
+            arguments:
+              artifacts:
+                - name: scores
+                  from: "{{tasks.compute-drift.outputs.artifacts.scores}}"
+
+    # ----------------- shared spec для pod-ів кроків ----------------------
+    # DRY: усі 3 контейнери мають однакові env та securityContext.
+    # Використовуємо template-параметризацію через YAML anchors -- не
+    # підтримується Argo, тому дублюємо явно нижче.
+
+    # ----------------- fetch-predictions (S3 → parquet artefact) ---------
+    - name: fetch-step
+      metadata:
+        labels:
+          app: iris-drift
+          step: fetch
+          part-of: goit-mlops
+      retryStrategy:
+        limit: "2"
+        retryPolicy: "OnError"
+        backoff:
+          duration: "30s"
+          factor: "2"
+      outputs:
+        artifacts:
+          - name: current
+            path: /tmp/current.parquet
+      container:
+        image: "{{workflow.parameters.evidently-image}}"
+        imagePullPolicy: Always
+        command: ["python", "drift_job.py"]
+        args: ["fetch", "--output", "/tmp/current.parquet"]
+        env: &drift_env
+          - name: MODEL_NAME
+            value: "{{workflow.parameters.model-name}}"
+          - name: ENVIRONMENT
+            value: "{{workflow.parameters.environment}}"
+          - name: PREDICTIONS_BUCKET
+            value: "{{workflow.parameters.predictions-bucket}}"
+          - name: PREDICTIONS_PREFIX
+            value: "{{workflow.parameters.predictions-prefix}}"
+          - name: LOOKBACK_HOURS
+            value: "{{workflow.parameters.lookback-hours}}"
+          - name: MLFLOW_S3_ENDPOINT_URL
+            value: "http://minio.mlops-system.svc.cluster.local:9000"
+          - name: PUSHGATEWAY_URL
+            value: "http://pushgateway-prometheus-pushgateway.monitoring.svc.cluster.local:9091"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: evidently-s3
+                key: access_key_id
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: evidently-s3
+                key: secret_access_key
+          - name: LOG_LEVEL
+            value: "INFO"
+          - name: WORKFLOW_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['workflows.argoproj.io/workflow']
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 512Mi}
+        securityContext: &drift_sec
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop: [ALL]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+          - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+
+    # ----------------- compute-drift (parquet → scores.json) --------------
+    - name: compute-step
+      metadata:
+        labels:
+          app: iris-drift
+          step: compute
+          part-of: goit-mlops
+      inputs:
+        artifacts:
+          - name: current
+            path: /tmp/current.parquet
+      outputs:
+        artifacts:
+          - name: scores
+            path: /tmp/scores.json
+      container:
+        image: "{{workflow.parameters.evidently-image}}"
+        imagePullPolicy: Always
+        command: ["python", "drift_job.py"]
+        args:
+          - "compute"
+          - "--input"
+          - "/tmp/current.parquet"
+          - "--output"
+          - "/tmp/scores.json"
+        env: *drift_env
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: 500m, memory: 512Mi}
+        securityContext: *drift_sec
+        volumeMounts:
+          - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+
+    # ----------------- publish (Pushgateway + audit) ----------------------
+    - name: publish-step
+      metadata:
+        labels:
+          app: iris-drift
+          step: publish
+          part-of: goit-mlops
+      retryStrategy:
+        limit: "2"
+        retryPolicy: "OnError"
+        backoff:
+          duration: "15s"
+          factor: "2"
+      inputs:
+        artifacts:
+          - name: scores
+            path: /tmp/scores.json
+      container:
+        image: "{{workflow.parameters.evidently-image}}"
+        imagePullPolicy: Always
+        command: ["python", "drift_job.py"]
+        args: ["publish", "--input", "/tmp/scores.json"]
+        env: *drift_env
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: 200m, memory: 256Mi}
+        securityContext: *drift_sec
+        volumeMounts:
+          - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+---
+# CronWorkflow — запускає iris-drift кожні 6 годин.
+# Заміна `batch/v1 CronJob` з збереженням тієї ж поведінки:
+#   - schedule = "0 */6 * * *" (кожні 6 год);
+#   - concurrencyPolicy = Forbid;
+#   - історія: 3 успішних + 3 фейлених (через ttlStrategy WorkflowTemplate).
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mlops-drift
+  namespace: mlops-system
+  labels:
+    app.kubernetes.io/name: mlops-drift
+    app.kubernetes.io/part-of: goit-mlops
+spec:
+  schedule: "0 */6 * * *"
+  timezone: "UTC"
+  concurrencyPolicy: "Forbid"
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    workflowTemplateRef:
+      name: iris-drift
+    # arguments наслідуються від WorkflowTemplate; тут можна override
+    # (наприклад, evidently-image=:sha) при потребі закріпити версію.

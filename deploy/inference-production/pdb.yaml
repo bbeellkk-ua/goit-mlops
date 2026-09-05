@@ -1,0 +1,26 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inference-blue
+  namespace: mlops-production
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: inference
+      environment: production
+      color: blue
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inference-green
+  namespace: mlops-production
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: inference
+      environment: production
+      color: green

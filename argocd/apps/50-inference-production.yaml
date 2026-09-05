@@ -1,0 +1,27 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mlops-inference-production
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/bbeellkk-ua/goit-mlops.git
+    targetRevision: final
+    path: deploy/inference-production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mlops-production
+  syncPolicy:
+    # NOTE: selfHeal is disabled in production so that a manual Service edit
+    # for a Blue-Green switch is not immediately reverted before we've had a
+    # chance to commit the flip. The pruning of stale resources is also off:
+    # we only prune on explicit action.
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - ServerSideApply=true

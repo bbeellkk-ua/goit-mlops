@@ -1,0 +1,202 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlops-inference-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: goit-mlops
+data:
+  mlops-inference.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "graphTooltip": 1,
+      "schemaVersion": 39,
+      "tags": ["mlops", "inference"],
+      "time": {"from": "now-1h", "to": "now"},
+      "timezone": "",
+      "title": "MLOps — Iris Inference",
+      "uid": "mlops-inference",
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": "label_values(inference_requests_total, namespace)",
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true,
+            "current": {"selected": true, "text": "All", "value": "$__all"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Active model version",
+          "id": 1,
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "max by (model_version, namespace) (inference_model{namespace=~\"$namespace\"})",
+              "legendFormat": "{{namespace}} — v{{model_version}}",
+              "refId": "A"
+            }
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value_and_name"}
+        },
+        {
+          "type": "stat",
+          "title": "Model ready",
+          "id": 2,
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+          "targets": [
+            {
+              "expr": "max by (namespace) (inference_model_ready{namespace=~\"$namespace\"})",
+              "legendFormat": "{{namespace}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {"type": "value", "options": {"0": {"text": "NOT READY", "color": "red"}}},
+                {"type": "value", "options": {"1": {"text": "READY", "color": "green"}}}
+              ]
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Drift score",
+          "id": 3,
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "targets": [
+            {
+              "expr": "max by (model_name, environment) (mlops_drift_score)",
+              "legendFormat": "{{model_name}} / {{environment}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.15},
+                  {"color": "red", "value": 0.3}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Rate-limited (429/s)",
+          "id": 4,
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+          "targets": [
+            {
+              "expr": "sum by (namespace) (rate(inference_requests_total{status=\"429\", namespace=~\"$namespace\"}[5m]))",
+              "legendFormat": "{{namespace}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "RPS (by status)",
+          "id": 10,
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "targets": [
+            {
+              "expr": "sum by (status) (rate(inference_requests_total{namespace=~\"$namespace\"}[1m]))",
+              "legendFormat": "{{status}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Latency p50 / p95 / p99 (/predict)",
+          "id": 11,
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(inference_request_duration_seconds_bucket{endpoint=\"/predict\", namespace=~\"$namespace\"}[5m])))",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(inference_request_duration_seconds_bucket{endpoint=\"/predict\", namespace=~\"$namespace\"}[5m])))",
+              "legendFormat": "p95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(inference_request_duration_seconds_bucket{endpoint=\"/predict\", namespace=~\"$namespace\"}[5m])))",
+              "legendFormat": "p99",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Predictions by class",
+          "id": 12,
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "targets": [
+            {
+              "expr": "sum by (predicted_class) (rate(inference_predictions_total{namespace=~\"$namespace\"}[5m]))",
+              "legendFormat": "{{predicted_class}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Error rate (4xx+5xx / total)",
+          "id": 13,
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+          "targets": [
+            {
+              "expr": "sum by (namespace) (rate(inference_requests_total{status=~\"4..|5..\", namespace=~\"$namespace\"}[5m])) / sum by (namespace) (rate(inference_requests_total{namespace=~\"$namespace\"}[5m]))",
+              "legendFormat": "{{namespace}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "percentunit"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "CPU usage (cores)",
+          "id": 20,
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+          "targets": [
+            {
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", container=\"inference\"}[5m]))",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Memory usage (MiB)",
+          "id": 21,
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+          "targets": [
+            {
+              "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", container=\"inference\"}) / 1048576",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "decmbytes"}}
+        }
+      ]
+    }

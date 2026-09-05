@@ -1,0 +1,53 @@
+---
+name: mlops-rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      to_version:
+        description: "Model version to roll back to. If empty, use the latest Archived."
+        required: false
+      actor:
+        description: "Actor initiating the rollback (audit)"
+        required: true
+      reason:
+        description: "Reason for rollback (audit)"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install -r goit-mlops/training/requirements.txt
+      - name: Port-forward MLflow
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_B64" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          nohup kubectl -n mlops-system port-forward svc/mlflow 5000:5000 > /tmp/pf.log 2>&1 &
+          sleep 5
+      - name: Run rollback.py
+        env:
+          MLFLOW_TRACKING_URI: http://127.0.0.1:5000
+          MODEL_NAME: iris-classifier
+        run: |
+          cd goit-mlops/training
+          ARGS="--actor '${{ inputs.actor }}' --reason '${{ inputs.reason }}'"
+          if [ -n "${{ inputs.to_version }}" ]; then
+            ARGS="$ARGS --to-version ${{ inputs.to_version }}"
+          fi
+          eval python rollback.py $ARGS

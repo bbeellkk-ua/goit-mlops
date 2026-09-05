@@ -1,0 +1,52 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: minio
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: minio
+    targetRevision: 13.7.2
+    helm:
+      releaseName: minio
+      values: |
+        global:
+          imageRegistry: docker.io
+          security:
+            allowInsecureImages: true
+        image:
+          registry: docker.io
+          repository: bitnamilegacy/minio
+        clientImage:
+          registry: docker.io
+          repository: bitnamilegacy/minio-client
+        auth:
+          rootUser: minio
+          rootPassword: minio123
+        defaultBuckets: "mlflow-artifacts"
+        service:
+          type: ClusterIP
+        persistence:
+          enabled: false
+        nodeSelector:
+          node: infra
+        tolerations:
+          - key: node
+            operator: Equal
+            value: infra
+            effect: NoSchedule
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mlops-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true

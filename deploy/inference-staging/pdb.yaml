@@ -1,0 +1,12 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inference
+  namespace: mlops-staging
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: inference
+      environment: staging

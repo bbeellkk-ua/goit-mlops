@@ -1,0 +1,36 @@
+---
+# Публічний DNS обслуговує Cloudflare + cloudflared-tunnel до ingress-nginx.
+# TLS-сертифікати випускаються cert-manager через ClusterIssuer з DNS-01
+# челенджем (Cloudflare API) — це дозволяє видавати вайлдкард-сертифікати
+# без публічних HTTP-01 портів. Автентифікація користувачів — через
+# Cloudflare Zero Trust Application (email/SSO), тому endpoint не потребує
+# додаткового auth-шару всередині кластера.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: inference
+  namespace: mlops-staging
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-dns01
+    nginx.ingress.kubernetes.io/limit-rpm: "600"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - iris-staging.squirell.pp.ua
+      secretName: inference-staging-tls
+  rules:
+    - host: iris-staging.squirell.pp.ua
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: inference
+                port:
+                  number: 80

@@ -1,0 +1,99 @@
+# Спрощений варіант запуску аналізу змін моделей без Argo Workflows
+# ---
+# apiVersion: v1
+# kind: ServiceAccount
+# metadata:
+#   name: evidently-sa
+#   namespace: mlops-system
+# ---
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: evidently-s3
+#   namespace: mlops-system
+# type: Opaque
+# stringData:
+#   access_key_id: "minio"
+#   secret_access_key: "minio123"
+# ---
+# apiVersion: batch/v1
+# kind: CronJob
+# metadata:
+#   name: mlops-drift
+#   namespace: mlops-system
+#   labels:
+#     app.kubernetes.io/name: mlops-drift
+#     app.kubernetes.io/part-of: goit-mlops
+# spec:
+#   schedule: "0 */6 * * *"
+#   concurrencyPolicy: Forbid
+#   successfulJobsHistoryLimit: 3
+#   failedJobsHistoryLimit: 3
+#   jobTemplate:
+#     spec:
+#       backoffLimit: 2
+#       ttlSecondsAfterFinished: 3600
+#       template:
+#         metadata:
+#           labels:
+#             app: mlops-drift
+#         spec:
+#           restartPolicy: OnFailure
+#           serviceAccountName: evidently-sa
+#           securityContext:
+#             runAsNonRoot: true
+#             runAsUser: 1000
+#             runAsGroup: 1000
+#             fsGroup: 1000
+#             seccompProfile:
+#               type: RuntimeDefault
+#           containers:
+#             - name: drift
+#               image: ghcr.io/bbeellkk-ua/goit-mlops-evidently:latest
+#               imagePullPolicy: Always
+#               env:
+#                 - name: MODEL_NAME
+#                   value: "iris-classifier"
+#                 - name: ENVIRONMENT
+#                   value: "production"
+#                 - name: MLFLOW_S3_ENDPOINT_URL
+#                   value: "http://minio.mlops-system.svc.cluster.local:9000"
+#                 - name: AWS_ACCESS_KEY_ID
+#                   valueFrom:
+#                     secretKeyRef:
+#                       name: evidently-s3
+#                       key: access_key_id
+#                 - name: AWS_SECRET_ACCESS_KEY
+#                   valueFrom:
+#                     secretKeyRef:
+#                       name: evidently-s3
+#                       key: secret_access_key
+#                 - name: PREDICTIONS_BUCKET
+#                   value: "mlflow-artifacts"
+#                 - name: PREDICTIONS_PREFIX
+#                   value: "predictions/production/"
+#                 - name: LOOKBACK_HOURS
+#                   value: "24"
+#                 - name: PUSHGATEWAY_URL
+#                   value: "http://pushgateway-prometheus-pushgateway.monitoring.svc.cluster.local:9091"
+#                 - name: LOG_LEVEL
+#                   value: "INFO"
+#               resources:
+#                 requests:
+#                   cpu: "100m"
+#                   memory: "256Mi"
+#                 limits:
+#                   cpu: "500m"
+#                   memory: "512Mi"
+#               securityContext:
+#                 allowPrivilegeEscalation: false
+#                 readOnlyRootFilesystem: true
+#                 capabilities:
+#                   drop:
+#                     - ALL
+#               volumeMounts:
+#                 - name: tmp
+#                   mountPath: /tmp
+#           volumes:
+#             - name: tmp
+#               emptyDir: {}

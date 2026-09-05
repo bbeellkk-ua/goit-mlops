@@ -1,0 +1,26 @@
+---
+# Scrape BOTH colors regardless of which one is receiving live traffic —
+# metrics for the idle color help verify readiness before a switch.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: inference
+  namespace: mlops-production
+  labels:
+    release: kube-prometheus-stack
+    app: inference
+    environment: production
+spec:
+  selector:
+    matchLabels:
+      app: inference
+      environment: production
+  namespaceSelector:
+    matchNames:
+      - mlops-production
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
