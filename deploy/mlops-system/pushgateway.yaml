@@ -22,6 +22,15 @@ spec:
           enabled: true
           additionalLabels:
             release: kube-prometheus-stack
+        # pushgateway живе у namespace `monitoring`, який має власний ResourceQuota;
+        # тримаємо requests/limits маленькими — pushgateway майже нічого не їсть.
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
         nodeSelector:
           node: infra
         tolerations:

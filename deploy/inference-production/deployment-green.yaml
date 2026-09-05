@@ -38,6 +38,13 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: inference-sa
+      nodeSelector:
+        node: infra
+      tolerations:
+        - key: node
+          operator: Equal
+          value: infra
+          effect: NoSchedule
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

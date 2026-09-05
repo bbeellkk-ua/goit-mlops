@@ -55,6 +55,13 @@ metadata:
 spec:
   entrypoint: pipeline
   serviceAccountName: evidently-sa
+  nodeSelector:
+    node: infra
+  tolerations:
+    - key: node
+      operator: Equal
+      value: infra
+      effect: NoSchedule
   ttlStrategy:
     secondsAfterCompletion: 3600
     secondsAfterSuccess: 86400
@@ -264,5 +271,14 @@ spec:
   workflowSpec:
     workflowTemplateRef:
       name: iris-drift
+    # nodeSelector/tolerations також повторюємо тут, бо workflowSpec
+    # у CronWorkflow не наслідує їх автоматично з WorkflowTemplate.
+    nodeSelector:
+      node: infra
+    tolerations:
+      - key: node
+        operator: Equal
+        value: infra
+        effect: NoSchedule
     # arguments наслідуються від WorkflowTemplate; тут можна override
     # (наприклад, evidently-image=:sha) при потребі закріпити версію.

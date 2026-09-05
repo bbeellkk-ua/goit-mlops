@@ -30,6 +30,13 @@ metadata:
 spec:
   entrypoint: pipeline
   serviceAccountName: training-sa
+  nodeSelector:
+    node: infra
+  tolerations:
+    - key: node
+      operator: Equal
+      value: infra
+      effect: NoSchedule
   ttlStrategy:
     secondsAfterCompletion: 3600
     secondsAfterSuccess: 86400

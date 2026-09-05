@@ -33,6 +33,14 @@ spec:
           type: ClusterIP
         persistence:
           enabled: false
+        # ResourceQuota у mlops-system вимагає requests+limits для всіх подів.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         nodeSelector:
           node: infra
         tolerations:
