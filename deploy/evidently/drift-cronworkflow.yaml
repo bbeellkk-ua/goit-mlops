@@ -126,12 +126,12 @@ spec:
       outputs:
         artifacts:
           - name: current
-            path: /tmp/current.parquet
+            path: /argo/outputs/current.parquet
       container:
         image: "{{workflow.parameters.evidently-image}}"
         imagePullPolicy: Always
         command: ["python", "drift_job.py"]
-        args: ["fetch", "--output", "/tmp/current.parquet"]
+        args: ["fetch", "--output", "/argo/outputs/current.parquet"]
         env: &drift_env
           - name: MODEL_NAME
             value: "{{workflow.parameters.model-name}}"
@@ -191,11 +191,11 @@ spec:
       inputs:
         artifacts:
           - name: current
-            path: /tmp/current.parquet
+            path: /argo/inputs/current.parquet
       outputs:
         artifacts:
           - name: scores
-            path: /tmp/scores.json
+            path: /argo/outputs/scores.json
       container:
         image: "{{workflow.parameters.evidently-image}}"
         imagePullPolicy: Always
@@ -203,9 +203,9 @@ spec:
         args:
           - "compute"
           - "--input"
-          - "/tmp/current.parquet"
+          - "/argo/inputs/current.parquet"
           - "--output"
-          - "/tmp/scores.json"
+          - "/argo/outputs/scores.json"
         env: *drift_env
         resources:
           requests: {cpu: 100m, memory: 256Mi}
@@ -232,12 +232,12 @@ spec:
       inputs:
         artifacts:
           - name: scores
-            path: /tmp/scores.json
+            path: /argo/inputs/scores.json
       container:
         image: "{{workflow.parameters.evidently-image}}"
         imagePullPolicy: Always
         command: ["python", "drift_job.py"]
-        args: ["publish", "--input", "/tmp/scores.json"]
+        args: ["publish", "--input", "/argo/inputs/scores.json"]
         env: *drift_env
         resources:
           requests: {cpu: 50m, memory: 128Mi}
