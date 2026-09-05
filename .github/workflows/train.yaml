@@ -81,7 +81,7 @@ jobs:
             -e "s|__RANDOM_STATE__|${RANDOM_STATE}|g" \
             -e "s|__TEST_SIZE__|${TEST_SIZE}|g" \
             -e "s|__TRAINING_IMAGE__|${TRAINING_IMAGE_SHORT}|g" \
-            goit-mlops/training/train-workflow.tpl.yaml > /tmp/train-workflow.yaml
+            training/train-workflow.tpl.yaml > /tmp/train-workflow.yaml
           echo "---- rendered Workflow ----"
           cat /tmp/train-workflow.yaml
       - name: Submit Workflow

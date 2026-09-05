@@ -30,7 +30,7 @@ jobs:
       - name: Install deps
         run: |
           pip install --upgrade pip
-          pip install -r goit-mlops/training/requirements.txt
+          pip install -r training/requirements.txt
       - name: Port-forward MLflow
         env:
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
@@ -44,10 +44,13 @@ jobs:
         env:
           MLFLOW_TRACKING_URI: http://127.0.0.1:5000
           MODEL_NAME: iris-classifier
+          IN_ACTOR: ${{ inputs.actor }}
+          IN_REASON: ${{ inputs.reason }}
+          IN_TO_VERSION: ${{ inputs.to_version }}
         run: |
-          cd goit-mlops/training
-          ARGS="--actor '${{ inputs.actor }}' --reason '${{ inputs.reason }}'"
-          if [ -n "${{ inputs.to_version }}" ]; then
-            ARGS="$ARGS --to-version ${{ inputs.to_version }}"
+          cd training
+          if [ -n "$IN_TO_VERSION" ]; then
+            python rollback.py --actor "$IN_ACTOR" --reason "$IN_REASON" --to-version "$IN_TO_VERSION"
+          else
+            python rollback.py --actor "$IN_ACTOR" --reason "$IN_REASON"
           fi
-          eval python rollback.py $ARGS

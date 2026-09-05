@@ -43,11 +43,12 @@ jobs:
           pip install --upgrade pip
           pip install ruff==0.6.9 yamllint==1.35.1
       - name: ruff check
-        run: cd goit-mlops && ruff check .
+        run: ruff check .
       - name: ruff format --check
-        run: cd goit-mlops && ruff format --check .
+        run: ruff format --check .
       - name: yamllint
-        run: cd goit-mlops && yamllint -c .yamllint.yaml .
+        run: yamllint -c .yamllint.yaml .
+
       - name: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -68,9 +69,9 @@ jobs:
       - name: Install deps
         run: |
           pip install --upgrade pip
-          pip install -r goit-mlops/training/requirements.txt
+          pip install -r training/requirements.txt
       - name: pytest
-        run: cd goit-mlops/training && python -m pytest -q
+        run: cd training && python -m pytest -q
 
   test-inference:
     name: test (inference)
@@ -84,11 +85,11 @@ jobs:
       - name: Install deps
         run: |
           pip install --upgrade pip
-          pip install -r goit-mlops/inference/requirements.txt
+          pip install -r inference/requirements.txt
           # tests boot a real MLflow file-store, need training deps too
-          pip install -r goit-mlops/training/requirements.txt
+          pip install -r training/requirements.txt
       - name: pytest
-        run: cd goit-mlops/inference && PYTHONPATH=. python -m pytest -q
+        run: cd inference && PYTHONPATH=. python -m pytest -q
 
   # -----------------------------------------------------------------
   # Docker images
@@ -121,8 +122,8 @@ jobs:
       - name: Build & push
         uses: docker/build-push-action@v6
         with:
-          context: goit-mlops/${{ matrix.component }}
-          file: goit-mlops/${{ matrix.component }}/Dockerfile
+          context: ${{ matrix.component }}
+          file: ${{ matrix.component }}/Dockerfile
           push: true
           tags: |
             ${{ steps.tag.outputs.image }}:sha-${{ steps.tag.outputs.short_sha }}
