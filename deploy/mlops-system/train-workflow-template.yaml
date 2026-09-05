@@ -271,13 +271,13 @@ stringData:
   access_key_id: "minio"
   secret_access_key: "minio123"
 ---
-# Той самий Secret для Argo Workflows artifact repository (див.
+# Secret для Argo Workflows artifact repository (див.
 # argocd/apps/25-argo-workflows.yaml → artifactRepository.s3).
 apiVersion: v1
 kind: Secret
 metadata:
   name: argo-workflows-s3
-  namespace: argo
+  namespace: mlops-system
 type: Opaque
 stringData:
   access_key_id: "minio"
