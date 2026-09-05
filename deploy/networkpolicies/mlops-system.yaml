@@ -11,7 +11,12 @@ spec:
     - Ingress
     - Egress
 ---
-# Egress: allow DNS + intra-namespace + internet HTTPS (MLflow uses PyPI on cold start of training jobs).
+# Egress: allow DNS + intra-namespace + kube-apiserver + інші робочі NS.
+# Argo Workflows executor POSTить workflowtaskresults у kube-apiserver
+# (443), тому потрібен egress до нього. IP апі-сервера не належить жодному
+# namespace, тож `namespaceSelector` для нього не працює — використовуємо
+# порожній `to:` для дозволу егресу на 443 у весь кластер (обмежений
+# `podSelector: {}` для policy scope).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -41,6 +46,14 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+    # kube-apiserver: IP не в namespace, тому дозволяємо TCP/443 всюди.
+    - ports:
+        - protocol: TCP
+          port: 443
+    # HTTPS назовні для MLflow/pip/ghcr під час cold start training jobs.
+    - ports:
+        - protocol: TCP
+          port: 6443
 ---
 # Ingress into mlops-system: allow ingress-nginx (MLflow UI), Prometheus scraping, and workloads from mlops-staging/production/monitoring.
 apiVersion: networking.k8s.io/v1

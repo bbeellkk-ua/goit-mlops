@@ -28,7 +28,9 @@ spec:
         auth:
           rootUser: minio
           rootPassword: minio123
-        defaultBuckets: "mlflow-artifacts"
+        # Comma-separated. `argo-workflows` bucket використовується Argo
+        # executor-ом для archiveLogs та artefact passing між кроками DAG.
+        defaultBuckets: "mlflow-artifacts,argo-workflows"
         service:
           type: ClusterIP
         persistence:
