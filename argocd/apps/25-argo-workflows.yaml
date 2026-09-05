@@ -21,9 +21,14 @@ spec:
       releaseName: argo-workflows
       valueFiles: []
       values: |
-        # Мінімальна production-конфігурація: один controller + один server.
-        # У локальному k3s кластері не піднімаємо metrics-агрегацію окремо —
-        # kube-prometheus-stack підбере ServiceMonitor.
+        executor:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
         controller:
           workflowNamespaces:
             - mlops-system
