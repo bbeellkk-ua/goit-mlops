@@ -107,3 +107,20 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: training-runtime
+---
+# evidently-sa (Argo Workflow steps for iris-drift)
+# Reuses training-runtime Role — needs same Argo wait sidecar permissions
+# (patch pods, create/patch workflowtaskresults) to record step artifacts & status.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: evidently-runtime
+  namespace: mlops-system
+subjects:
+  - kind: ServiceAccount
+    name: evidently-sa
+    namespace: mlops-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: training-runtime
